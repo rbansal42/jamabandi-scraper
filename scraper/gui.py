@@ -41,6 +41,7 @@ DEFAULTS = {
     "pdf_workers": 4,
 }
 
+# Not a security measure — prevents accidental edits by end-users only.
 ADVANCED_PASSWORD = "admin123"
 
 
@@ -565,9 +566,8 @@ class JamabandiGUI:
         try:
             text = main_path.read_text(encoding="utf-8")
 
-            # Find and replace the CONFIG block using a regex
-            import re
-
+            # Find and replace the CONFIG block using a regex.
+            # NOTE: [^}]+ assumes CONFIG has no nested braces (currently true).
             pattern = r"CONFIG\s*=\s*\{[^}]+\}"
             if not re.search(pattern, text):
                 self._log("ERROR: Could not find CONFIG block in http_scraper.py.\n")
@@ -686,13 +686,21 @@ class JamabandiGUI:
         self._log(f"$ {' '.join(cmd)}\n\n")
 
         try:
+            # On Windows, CREATE_NEW_PROCESS_GROUP allows sending
+            # CTRL_BREAK_EVENT for graceful shutdown (see _stop_process).
+            extra = {}
+            if sys.platform == "win32":
+                extra["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 text=True,
+                encoding="utf-8",
                 bufsize=1,
                 cwd=str(PROJECT_DIR),
+                **extra,
             )
         except Exception as e:
             self._log(f"ERROR launching process: {e}\n")
@@ -709,7 +717,18 @@ class JamabandiGUI:
     def _stop_process(self):
         if self.process and self.process.poll() is None:
             self._log("\n--- Sending termination signal ---\n")
-            self.process.terminate()
+            if sys.platform == "win32":
+                # On Windows, terminate() calls TerminateProcess() which
+                # kills immediately with no cleanup.  Sending CTRL_BREAK
+                # gives the subprocess a chance to save progress.
+                import signal
+
+                try:
+                    self.process.send_signal(signal.CTRL_BREAK_EVENT)
+                except (OSError, ValueError):
+                    self.process.terminate()
+            else:
+                self.process.terminate()
             try:
                 self.process.wait(timeout=5)
             except subprocess.TimeoutExpired:

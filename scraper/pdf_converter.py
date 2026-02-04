@@ -181,7 +181,8 @@ def convert_html_to_pdf(html_path: Path, pdf_path: Path) -> bool:
         font_config = FontConfiguration()
 
         # Create HTML object
-        html_doc = HTML(string=html_content, base_url=str(html_path.parent))
+        # Use as_posix() so Windows backslashes don't break URL resolution
+        html_doc = HTML(string=html_content, base_url=html_path.parent.as_posix())
 
         # Create custom CSS
         css = CSS(string=CUSTOM_CSS, font_config=font_config)
