@@ -28,11 +28,12 @@ from weasyprint import HTML, CSS
 from weasyprint.text.fonts import FontConfiguration
 
 
-# Custom CSS to override print-blocking styles and improve PDF output
+# Custom CSS to override print-blocking styles and improve PDF output.
+# Landscape A4 gives ~277mm usable width for the 12-column Jamabandi table.
 CUSTOM_CSS = """
 @page {
-    size: A4;
-    margin: 1cm;
+    size: A4 landscape;
+    margin: 0.6cm;
 }
 
 /* Override the print-blocking CSS */
@@ -47,18 +48,38 @@ CUSTOM_CSS = """
 html, body {
     display: block !important;
     visibility: visible !important;
+    margin: 0;
+    padding: 0;
 }
 
-/* Improve table rendering */
+/* ── Table rendering ─────────────────────────────────────── */
 table {
-    width: 100%;
+    width: 100% !important;
     border-collapse: collapse;
-    font-size: 10pt;
+    font-size: 7.5pt;
+    table-layout: fixed;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
 }
 
 th, td {
     border: 1px solid #333;
-    padding: 4px;
+    padding: 2px 3px;
+    overflow: hidden;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+}
+
+th {
+    font-size: 7pt;
+    background-color: #eee;
+}
+
+/* Strip any leftover inline widths the source HTML sets on spans */
+span[style] {
+    width: auto !important;
+    max-width: 100% !important;
+    position: static !important;
 }
 
 /* Hide unnecessary elements */
@@ -70,18 +91,25 @@ th, td {
 script {
     display: none !important;
 }
+
+/* Hide header/nav/button rows */
+#btnLogout, #btnGetVirifiableNakal, #dvlang {
+    display: none !important;
+}
 """
 
 # Shared counter for cross-process progress tracking
 _shared_counter = None
 _total_files = None
+_delete_html = False
 
 
-def _init_worker(counter, total):
+def _init_worker(counter, total, delete_html):
     """Initializer for each worker process to set up shared state."""
-    global _shared_counter, _total_files
+    global _shared_counter, _total_files, _delete_html
     _shared_counter = counter
     _total_files = total
+    _delete_html = delete_html
 
 
 def clean_html(html_content: str) -> str:
@@ -89,7 +117,8 @@ def clean_html(html_content: str) -> str:
     Clean HTML content for better PDF conversion.
     - Remove print-blocking CSS
     - Remove JavaScript
-    - Fix relative URLs
+    - Strip inline width / position styles that cause clipping
+    - Remove external stylesheets (we supply our own)
     """
     # Remove the @media print block that hides content
     html_content = re.sub(
@@ -112,6 +141,24 @@ def clean_html(html_content: str) -> str:
     # Remove form elements that might cause issues
     html_content = re.sub(
         r'<input[^>]*type=["\']hidden["\'][^>]*>', "", html_content, flags=re.IGNORECASE
+    )
+
+    # ── Strip inline widths from <td> and <span> that force fixed pixel sizes ──
+    # e.g. style="width: 82px; height: 21px"  ->  style="height: 21px"
+    # e.g. style="display:inline-block;width:200px;"  ->  style="display:inline-block;"
+    html_content = re.sub(
+        r"width\s*:\s*\d+px\s*;?\s*", "", html_content, flags=re.IGNORECASE
+    )
+
+    # Strip position: relative/static with left/top offsets that shift content
+    html_content = re.sub(
+        r"position\s*:\s*(?:relative|static)\s*;?\s*",
+        "",
+        html_content,
+        flags=re.IGNORECASE,
+    )
+    html_content = re.sub(
+        r"(?:left|top)\s*:\s*-?\d+px\s*;?\s*", "", html_content, flags=re.IGNORECASE
     )
 
     return html_content
@@ -166,7 +213,7 @@ def process_batch(
     Returns:
         Dict with worker_id, success_count, fail_count, failed_files.
     """
-    global _shared_counter, _total_files
+    global _shared_counter, _total_files, _delete_html
 
     success_count = 0
     fail_count = 0
@@ -191,6 +238,15 @@ def process_batch(
                     f"-> {pdf_path.name}"
                 )
             success_count += 1
+
+            # Delete the source HTML after successful conversion
+            if _delete_html:
+                try:
+                    html_path.unlink()
+                except OSError as e:
+                    print(
+                        f"  [Worker {worker_id}] Warning: could not delete {html_path.name}: {e}"
+                    )
         else:
             print(f"  [Worker {worker_id}] FAILED {html_path.name}")
             fail_count += 1
@@ -268,6 +324,12 @@ def main():
         default=False,
         help="Skip HTML files that already have a corresponding PDF in the output dir",
     )
+    parser.add_argument(
+        "--delete-html",
+        action="store_true",
+        default=False,
+        help="Delete each HTML file after it has been successfully converted to PDF",
+    )
     args = parser.parse_args()
 
     input_dir = Path(args.input)
@@ -333,6 +395,11 @@ def main():
     # Set up shared multiprocessing counter for progress
     shared_counter = multiprocessing.Value("i", 0)
     shared_total = multiprocessing.Value("i", total_files)
+    delete_html = args.delete_html
+
+    if delete_html:
+        print("HTML files will be DELETED after successful conversion.")
+        print()
 
     start_time = time.time()
 
@@ -341,7 +408,7 @@ def main():
     with ProcessPoolExecutor(
         max_workers=num_workers,
         initializer=_init_worker,
-        initargs=(shared_counter, shared_total),
+        initargs=(shared_counter, shared_total, delete_html),
     ) as executor:
         futures = {}
         for worker_id, batch in enumerate(batches):
@@ -400,6 +467,8 @@ def main():
     print(f"Total: {total_success} succeeded, {total_fail} failed out of {total_files}")
     if skipped_count > 0:
         print(f"Skipped (existing): {skipped_count}")
+    if delete_html:
+        print(f"Deleted {total_success} source HTML files.")
     print(f"PDFs saved to: {output_dir}")
 
     if all_failed_files:
