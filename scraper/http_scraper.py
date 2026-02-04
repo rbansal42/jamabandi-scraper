@@ -25,6 +25,9 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import urljoin
 
+# Ensure sibling modules are importable when run as a standalone script
+sys.path.insert(0, str(Path(__file__).parent))
+
 import requests
 from bs4 import BeautifulSoup
 
@@ -719,6 +722,86 @@ How to get your session cookie:
         import traceback
 
         traceback.print_exc()
+
+    # ── Auto-convert HTML to PDF after scraping ──────────────────────
+    auto_convert_to_pdf(CONFIG["downloads_dir"])
+
+
+def auto_convert_to_pdf(downloads_dir: str):
+    """Automatically convert all downloaded HTML files to PDF."""
+    dl_path = Path(downloads_dir)
+    html_files = sorted(dl_path.glob("nakal_khewat_*.html"))
+    if not html_files:
+        return
+
+    # Count how many still need conversion
+    pending = [f for f in html_files if not (dl_path / (f.stem + ".pdf")).exists()]
+    if not pending:
+        print("\nAll HTML files already converted to PDF.")
+        return
+
+    print("\n" + "=" * 60)
+    print("AUTO-CONVERTING HTML TO PDF")
+    print("=" * 60)
+    print(f"Directory: {dl_path}/")
+    print(
+        f"Files to convert: {len(pending)} (skipping {len(html_files) - len(pending)} existing)"
+    )
+    print()
+
+    try:
+        from pdf_converter import convert_html_to_pdf as _convert
+
+        import multiprocessing
+        from concurrent.futures import ProcessPoolExecutor
+
+        # Use the parallel converter if available, otherwise fall back to sequential
+        from pdf_converter import process_batch, split_into_batches, _init_worker
+
+        file_pairs = [(str(f), str(dl_path / (f.stem + ".pdf"))) for f in pending]
+        pdf_workers = min(4, len(file_pairs))
+
+        shared_counter = multiprocessing.Value("i", 0)
+        shared_total = multiprocessing.Value("i", len(file_pairs))
+        batches = split_into_batches(file_pairs, pdf_workers)
+
+        start_time = time.time()
+
+        results = []
+        with ProcessPoolExecutor(
+            max_workers=pdf_workers,
+            initializer=_init_worker,
+            initargs=(shared_counter, shared_total),
+        ) as executor:
+            futures = {}
+            for wid, batch in enumerate(batches):
+                if not batch:
+                    continue
+                futures[executor.submit(process_batch, wid, batch)] = wid
+
+            for future in as_completed(futures):
+                wid = futures[future]
+                try:
+                    results.append(future.result())
+                except Exception as e:
+                    print(f"  [PDF Worker {wid}] crashed: {e}")
+
+        elapsed = time.time() - start_time
+        total_ok = sum(r["success_count"] for r in results)
+        total_fail = sum(r["fail_count"] for r in results)
+
+        print(
+            f"\nPDF conversion done in {elapsed:.1f}s: "
+            f"{total_ok} succeeded, {total_fail} failed"
+        )
+
+    except ImportError:
+        print("WARNING: pdf_converter.py not found, skipping auto-conversion.")
+    except Exception as e:
+        print(f"WARNING: PDF conversion failed: {e}")
+        print(
+            f"You can convert manually: python pdf_converter.py --input {downloads_dir}"
+        )
 
 
 if __name__ == "__main__":

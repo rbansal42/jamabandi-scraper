@@ -14,8 +14,9 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-SCRIPT_DIR = Path(__file__).parent.resolve()
-GUI_CONFIG_FILE = SCRIPT_DIR / "gui_config.json"
+SRC_DIR = Path(__file__).parent.resolve()  # scraper/ — where .py files live
+PROJECT_DIR = SRC_DIR.parent.resolve()  # project root — data & config here
+GUI_CONFIG_FILE = PROJECT_DIR / "gui_config.json"
 
 DEFAULTS = {
     "district_code": "17",
@@ -35,6 +36,7 @@ DEFAULTS = {
     "max_retries": 3,
     "page_load_timeout": 30,
     "form_postback_sleep": 0.25,
+    "auto_convert_pdf": True,
     "pdf_input_dir": "",
     "pdf_output_dir": "",
     "pdf_workers": 4,
@@ -269,37 +271,46 @@ class JamabandiGUI:
         pdf_frame = ttk.LabelFrame(container, text="PDF Conversion", padding=8)
         pdf_frame.pack(fill=tk.X, pady=(0, 6))
 
+        # Auto-convert toggle
+        var_auto = tk.BooleanVar(value=DEFAULTS["auto_convert_pdf"])
+        self.vars["auto_convert_pdf"] = var_auto
+        ttk.Checkbutton(
+            pdf_frame,
+            text="Automatically convert to PDF after download completes",
+            variable=var_auto,
+        ).grid(row=0, column=0, columnspan=3, sticky=tk.W, pady=(0, 4))
+
         ttk.Label(pdf_frame, text="Input Dir:").grid(
-            row=0, column=0, sticky=tk.W, padx=(0, 4), pady=2
+            row=1, column=0, sticky=tk.W, padx=(0, 4), pady=2
         )
         var_pi = tk.StringVar(value=DEFAULTS["pdf_input_dir"])
         self.vars["pdf_input_dir"] = var_pi
         ttk.Entry(pdf_frame, textvariable=var_pi, width=40).grid(
-            row=0, column=1, sticky=tk.EW, pady=2
+            row=1, column=1, sticky=tk.EW, pady=2
         )
         ttk.Button(
             pdf_frame, text="Browse...", command=lambda: self._browse_dir(var_pi)
-        ).grid(row=0, column=2, sticky=tk.W, padx=(4, 0), pady=2)
+        ).grid(row=1, column=2, sticky=tk.W, padx=(4, 0), pady=2)
 
         ttk.Label(pdf_frame, text="Output Dir:").grid(
-            row=1, column=0, sticky=tk.W, padx=(0, 4), pady=2
+            row=2, column=0, sticky=tk.W, padx=(0, 4), pady=2
         )
         var_po = tk.StringVar(value=DEFAULTS["pdf_output_dir"])
         self.vars["pdf_output_dir"] = var_po
         ttk.Entry(pdf_frame, textvariable=var_po, width=40).grid(
-            row=1, column=1, sticky=tk.EW, pady=2
+            row=2, column=1, sticky=tk.EW, pady=2
         )
         ttk.Button(
             pdf_frame, text="Browse...", command=lambda: self._browse_dir(var_po)
-        ).grid(row=1, column=2, sticky=tk.W, padx=(4, 0), pady=2)
+        ).grid(row=2, column=2, sticky=tk.W, padx=(4, 0), pady=2)
 
         ttk.Label(pdf_frame, text="Workers:").grid(
-            row=2, column=0, sticky=tk.W, padx=(0, 4), pady=2
+            row=3, column=0, sticky=tk.W, padx=(0, 4), pady=2
         )
         var_w = tk.IntVar(value=DEFAULTS["pdf_workers"])
         self.vars["pdf_workers"] = var_w
         ttk.Spinbox(pdf_frame, from_=1, to=16, textvariable=var_w, width=6).grid(
-            row=2, column=1, sticky=tk.W, pady=2
+            row=3, column=1, sticky=tk.W, pady=2
         )
 
         pdf_frame.columnconfigure(1, weight=1)
@@ -361,7 +372,7 @@ class JamabandiGUI:
     # ─────────────────────────────────────────────────────────────────────
 
     def _browse_dir(self, var: tk.StringVar):
-        path = filedialog.askdirectory(initialdir=var.get() or str(SCRIPT_DIR))
+        path = filedialog.askdirectory(initialdir=var.get() or str(PROJECT_DIR))
         if path:
             var.set(path)
 
@@ -457,7 +468,7 @@ class JamabandiGUI:
             print(f"Warning: could not load config: {e}")
 
     # ─────────────────────────────────────────────────────────────────────
-    # UPDATE main_http.py CONFIG BLOCK
+    # UPDATE http_scraper.py CONFIG BLOCK
     # ─────────────────────────────────────────────────────────────────────
 
     def _resolve_downloads_dir(self, cfg: dict) -> str:
@@ -470,12 +481,12 @@ class JamabandiGUI:
 
     def _patch_main_http_config(self) -> bool:
         """
-        Rewrite the CONFIG dict in main_http.py to match GUI settings,
+        Rewrite the CONFIG dict in http_scraper.py to match GUI settings,
         so the subprocess picks up the right values.
         """
-        main_path = SCRIPT_DIR / "main_http.py"
+        main_path = SRC_DIR / "http_scraper.py"
         if not main_path.exists():
-            self._log("ERROR: main_http.py not found.\n")
+            self._log("ERROR: http_scraper.py not found.\n")
             return False
 
         cfg = self._get_config()
@@ -507,23 +518,23 @@ class JamabandiGUI:
 
             pattern = r"CONFIG\s*=\s*\{[^}]+\}"
             if not re.search(pattern, text):
-                self._log("ERROR: Could not find CONFIG block in main_http.py.\n")
+                self._log("ERROR: Could not find CONFIG block in http_scraper.py.\n")
                 return False
             text = re.sub(pattern, new_config_block, text, count=1)
 
             main_path.write_text(text)
-            self._log(f"Updated CONFIG in main_http.py.\n")
+            self._log(f"Updated CONFIG in http_scraper.py.\n")
             self._log(f"Downloads dir: {downloads_dir}\n")
             return True
         except Exception as e:
-            self._log(f"ERROR: Failed to patch main_http.py: {e}\n")
+            self._log(f"ERROR: Failed to patch http_scraper.py: {e}\n")
             return False
 
     # ─────────────────────────────────────────────────────────────────────
     # SUBPROCESS MANAGEMENT
     # ─────────────────────────────────────────────────────────────────────
 
-    def _read_output(self, proc: subprocess.Popen, label: str):
+    def _read_output(self, proc: subprocess.Popen, label: str, on_complete=None):
         """Read subprocess stdout/stderr and push to log. Runs in a thread."""
         try:
             for line in proc.stdout:
@@ -539,8 +550,19 @@ class JamabandiGUI:
         self._set_running(False)
         self.process = None
 
-    def _launch(self, cmd: list[str], label: str):
-        """Launch a subprocess and wire output to the log area."""
+        # Fire callback on the main thread (e.g. auto-convert after scraping)
+        if on_complete:
+            self.root.after(100, on_complete, code)
+
+    def _launch(self, cmd: list[str], label: str, on_complete=None):
+        """Launch a subprocess and wire output to the log area.
+
+        Args:
+            cmd: Command to run.
+            label: Display label for log messages.
+            on_complete: Optional callback(exit_code) called on the main thread
+                         after the process finishes.
+        """
         self._set_running(True)
         self._set_status(f"Running: {label}...")
         self._set_progress(0)
@@ -553,7 +575,7 @@ class JamabandiGUI:
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
-                cwd=str(SCRIPT_DIR),
+                cwd=str(PROJECT_DIR),
             )
         except Exception as e:
             self._log(f"ERROR launching process: {e}\n")
@@ -563,7 +585,7 @@ class JamabandiGUI:
 
         self.process = proc
         self.thread = threading.Thread(
-            target=self._read_output, args=(proc, label), daemon=True
+            target=self._read_output, args=(proc, label, on_complete), daemon=True
         )
         self.thread.start()
 
@@ -602,13 +624,13 @@ class JamabandiGUI:
 
         self._save_config()
 
-        # Patch CONFIG in main_http.py
+        # Patch CONFIG in http_scraper.py
         if not self._patch_main_http_config():
             return
 
         cmd = [
             sys.executable,
-            str(SCRIPT_DIR / "main_http.py"),
+            str(SRC_DIR / "http_scraper.py"),
             "--cookie",
             cookie,
             "--start",
@@ -624,9 +646,20 @@ class JamabandiGUI:
             cmd += ["--workers", str(workers)]
             self._log(f"Concurrent mode: {workers} workers\n")
 
-        self._launch(cmd, "Scraper")
+        # Chain auto-conversion if enabled
+        on_done = None
+        if cfg.get("auto_convert_pdf", False):
+            on_done = self._on_scraping_complete
 
-    def _start_pdf_conversion(self):
+        self._launch(cmd, "Scraper", on_complete=on_done)
+
+    def _start_pdf_conversion(self, input_dir_override: str = None):
+        """Manually or automatically trigger PDF conversion.
+
+        Args:
+            input_dir_override: If provided, use this as input dir instead of
+                                the GUI field (used by auto-convert).
+        """
         if self.process and self.process.poll() is None:
             messagebox.showwarning(
                 "Busy", "A process is already running. Stop it first."
@@ -634,12 +667,17 @@ class JamabandiGUI:
             return
 
         cfg = self._get_config()
-        input_dir = cfg["pdf_input_dir"].strip()
+        input_dir = input_dir_override or cfg["pdf_input_dir"].strip()
         output_dir = cfg["pdf_output_dir"].strip()
+
+        # Fall back to the scraper downloads directory if input dir is empty
+        if not input_dir:
+            input_dir = self._resolve_downloads_dir(cfg)
 
         if not input_dir:
             messagebox.showerror(
-                "Missing Input", "Please select a PDF input directory."
+                "Missing Input",
+                "Please select a PDF input directory or set a downloads directory.",
             )
             return
 
@@ -649,7 +687,7 @@ class JamabandiGUI:
 
         cmd = [
             sys.executable,
-            str(SCRIPT_DIR / "convert_to_pdf.py"),
+            str(SRC_DIR / "pdf_converter.py"),
             "--input",
             input_dir,
             "--workers",
@@ -660,6 +698,14 @@ class JamabandiGUI:
             cmd += ["--output", output_dir]
 
         self._launch(cmd, "PDF Converter")
+
+    def _on_scraping_complete(self, exit_code: int):
+        """Called after scraper finishes when auto-convert is enabled."""
+        cfg = self._get_config()
+        downloads_dir = self._resolve_downloads_dir(cfg)
+
+        self._log(f"\n--- Auto-converting HTML to PDF from {downloads_dir} ---\n")
+        self._start_pdf_conversion(input_dir_override=downloads_dir)
 
     # ─────────────────────────────────────────────────────────────────────
     # CLEANUP
