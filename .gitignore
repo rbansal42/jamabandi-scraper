@@ -1,0 +1,10 @@
+venv/
+__pycache__/
+.ruff_cache/
+.DS_Store
+downloads*/
+progress*.json
+gui_config.json
+scrape.log
+debug_form.html
+*.pyc
