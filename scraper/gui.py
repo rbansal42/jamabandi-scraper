@@ -7,6 +7,7 @@ Tkinter GUI for configuring and running the HTTP scraper and PDF converter.
 
 import json
 import os
+import re
 import subprocess
 import sys
 import threading
@@ -66,12 +67,14 @@ class JamabandiGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
         self.root.title("Jamabandi Land Records Scraper")
-        self.root.minsize(720, 820)
-        self.root.geometry("780x920")
+        self.root.minsize(720, 860)
+        self.root.geometry("800x1000")
 
         self.process: subprocess.Popen | None = None
         self.thread: threading.Thread | None = None
         self.advanced_unlocked = False
+        self._scrape_total = 0
+        self._scrape_done_count = 0
 
         # StringVar / IntVar / DoubleVar holders
         self.vars: dict[str, tk.Variable] = {}
@@ -202,12 +205,26 @@ class JamabandiGUI:
 
         main_frame.columnconfigure(1, weight=1)
 
-        # ── Advanced Settings ──────────────────────────────────────────
-        adv_frame = ttk.LabelFrame(
-            container, text="Advanced Settings (locked)", padding=8
+        # ── Advanced Settings (collapsible) ───────────────────────────
+        adv_header = ttk.Frame(container)
+        adv_header.pack(fill=tk.X, pady=(0, 0))
+
+        self.adv_collapsed = True
+        self.adv_toggle_btn = ttk.Button(
+            adv_header,
+            text="+ Advanced Settings (locked)",
+            command=self._toggle_advanced_panel,
         )
-        adv_frame.pack(fill=tk.X, pady=(0, 6))
+        self.adv_toggle_btn.pack(side=tk.LEFT)
+
+        self.unlock_btn = ttk.Button(
+            adv_header, text="Unlock", command=self._unlock_advanced
+        )
+        self.unlock_btn.pack(side=tk.LEFT, padx=(8, 0))
+
+        adv_frame = ttk.LabelFrame(container, text="Advanced Settings", padding=8)
         self.adv_frame = adv_frame
+        # Start collapsed — do NOT pack yet
 
         self.adv_widgets: list[ttk.Widget] = []
 
@@ -250,14 +267,10 @@ class JamabandiGUI:
             widget.grid(row=i, column=1, sticky=tk.W, pady=2)
             self.adv_widgets.append(widget)
 
-        self.unlock_btn = ttk.Button(
-            adv_frame, text="Unlock Advanced Settings", command=self._unlock_advanced
-        )
-        self.unlock_btn.grid(row=0, column=2, rowspan=2, padx=(20, 0), sticky=tk.N)
-
         # ── PDF Conversion ─────────────────────────────────────────────
         pdf_frame = ttk.LabelFrame(container, text="PDF Conversion", padding=8)
         pdf_frame.pack(fill=tk.X, pady=(0, 6))
+        self._pdf_frame = pdf_frame  # reference for collapsible advanced panel
 
         # Auto-convert toggle
         var_auto = tk.BooleanVar(value=DEFAULTS["auto_convert_pdf"])
@@ -336,17 +349,25 @@ class JamabandiGUI:
         )
         self.progress_bar.pack(fill=tk.X, side=tk.TOP)
 
+        status_row = ttk.Frame(prog_frame)
+        status_row.pack(fill=tk.X, pady=(2, 0))
+
         self.status_var = tk.StringVar(value="Ready")
-        ttk.Label(prog_frame, textvariable=self.status_var, foreground="gray").pack(
-            side=tk.LEFT, pady=(2, 0)
+        ttk.Label(status_row, textvariable=self.status_var, foreground="gray").pack(
+            side=tk.LEFT
         )
+
+        self.progress_label_var = tk.StringVar(value="")
+        ttk.Label(
+            status_row, textvariable=self.progress_label_var, foreground="gray"
+        ).pack(side=tk.RIGHT)
 
         # ── Log Output ─────────────────────────────────────────────────
         log_frame = ttk.LabelFrame(container, text="Log Output", padding=4)
         log_frame.pack(fill=tk.BOTH, expand=True)
 
         self.log_text = tk.Text(
-            log_frame, wrap=tk.WORD, height=14, state="disabled", font=("Courier", 11)
+            log_frame, wrap=tk.WORD, height=24, state="disabled", font=("Courier", 11)
         )
         scrollbar = ttk.Scrollbar(
             log_frame, orient=tk.VERTICAL, command=self.log_text.yview
@@ -407,8 +428,20 @@ class JamabandiGUI:
         self.conc_workers_spin.configure(state="normal" if enabled else "disabled")
 
     # ─────────────────────────────────────────────────────────────────────
-    # ADVANCED SETTINGS
+    # ADVANCED SETTINGS (collapsible + password-locked)
     # ─────────────────────────────────────────────────────────────────────
+
+    def _toggle_advanced_panel(self):
+        """Show/hide the advanced settings panel."""
+        if self.adv_collapsed:
+            self.adv_frame.pack(fill=tk.X, pady=(0, 6), before=self._pdf_frame)
+            prefix = "-"
+        else:
+            self.adv_frame.pack_forget()
+            prefix = "+"
+        self.adv_collapsed = not self.adv_collapsed
+        lock_label = "(unlocked)" if self.advanced_unlocked else "(locked)"
+        self.adv_toggle_btn.configure(text=f"{prefix} Advanced Settings {lock_label}")
 
     def _unlock_advanced(self):
         dialog = PasswordDialog(self.root, title="Unlock Advanced Settings")
@@ -420,6 +453,9 @@ class JamabandiGUI:
                 widget.configure(state="normal")
             self.unlock_btn.configure(state="disabled", text="Unlocked")
             self.adv_frame.configure(text="Advanced Settings (unlocked)")
+            # Update toggle button text
+            prefix = "-" if not self.adv_collapsed else "+"
+            self.adv_toggle_btn.configure(text=f"{prefix} Advanced Settings (unlocked)")
         else:
             messagebox.showerror("Error", "Incorrect password.")
 
@@ -552,11 +588,72 @@ class JamabandiGUI:
     # SUBPROCESS MANAGEMENT
     # ─────────────────────────────────────────────────────────────────────
 
+    # Regex patterns for parsing scraper / converter output
+    _RE_PROGRESS = re.compile(
+        r"Completed:\s*(\d+).*?Failed:\s*(\d+).*?Pending:\s*(\d+)"
+    )
+    _RE_KHEWAT = re.compile(r"Processing khewat\s+(\d+)")
+    _RE_SAVED = re.compile(r"Saved:\s+(.+)")
+    _RE_NO_RECORD = re.compile(r"No record found for khewat\s+(\d+)")
+
+    def _parse_progress_line(self, line: str):
+        """Extract progress info from a scraper output line and update UI."""
+        # "Progress: Completed: X, Failed: Y, Pending: Z"
+        m = self._RE_PROGRESS.search(line)
+        if m:
+            completed = int(m.group(1))
+            failed = int(m.group(2))
+            pending = int(m.group(3))
+            total = completed + failed + pending
+            if total > 0:
+                pct = (completed + failed) / total * 100
+                self._set_progress(pct)
+                self._set_progress_label(
+                    f"{completed} done, {failed} failed, {pending} left  ({pct:.0f}%)"
+                )
+            return
+
+        # "Processing khewat N..."
+        m = self._RE_KHEWAT.search(line)
+        if m:
+            self._set_status(f"Scraping khewat {m.group(1)}...")
+            return
+
+        # "Saved: filename"
+        m = self._RE_SAVED.search(line)
+        if m:
+            self._scrape_done_count += 1
+            total = self._scrape_total
+            if total > 0:
+                pct = self._scrape_done_count / total * 100
+                self._set_progress(pct)
+                self._set_progress_label(
+                    f"{self._scrape_done_count} / {total}  ({pct:.0f}%)"
+                )
+            return
+
+        # "No record found for khewat N" — still counts as processed
+        m = self._RE_NO_RECORD.search(line)
+        if m:
+            self._scrape_done_count += 1
+            total = self._scrape_total
+            if total > 0:
+                pct = self._scrape_done_count / total * 100
+                self._set_progress(pct)
+                self._set_progress_label(
+                    f"{self._scrape_done_count} / {total}  ({pct:.0f}%)"
+                )
+            return
+
+    def _set_progress_label(self, text: str):
+        self.root.after(0, self.progress_label_var.set, text)
+
     def _read_output(self, proc: subprocess.Popen, label: str, on_complete=None):
         """Read subprocess stdout/stderr and push to log. Runs in a thread."""
         try:
             for line in proc.stdout:
                 self._log(line)
+                self._parse_progress_line(line)
             proc.wait()
         except Exception as e:
             self._log(f"\n[{label}] Stream error: {e}\n")
@@ -565,6 +662,10 @@ class JamabandiGUI:
         self._log(f"\n[{label}] Process exited with code {code}.\n")
         self._set_status(f"{label} finished (exit {code})")
         self._set_progress(100 if code == 0 else 0)
+        if code == 0:
+            self._set_progress_label("Complete")
+        else:
+            self._set_progress_label(f"Exited with errors (code {code})")
         self._set_running(False)
         self.process = None
 
@@ -645,6 +746,10 @@ class JamabandiGUI:
         # Patch CONFIG in http_scraper.py
         if not self._patch_main_http_config():
             return
+
+        # Track progress counts for the progress bar
+        self._scrape_total = cfg["khewat_end"] - cfg["khewat_start"] + 1
+        self._scrape_done_count = 0
 
         cmd = [
             sys.executable,
