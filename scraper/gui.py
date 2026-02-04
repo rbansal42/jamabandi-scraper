@@ -460,7 +460,7 @@ class JamabandiGUI:
     def _save_config(self):
         cfg = self._get_config()
         try:
-            with open(GUI_CONFIG_FILE, "w") as f:
+            with open(GUI_CONFIG_FILE, "w", encoding="utf-8") as f:
                 json.dump(cfg, f, indent=2)
         except Exception as e:
             self._log(f"Warning: could not save config: {e}\n")
@@ -469,7 +469,7 @@ class JamabandiGUI:
         if not GUI_CONFIG_FILE.exists():
             return
         try:
-            with open(GUI_CONFIG_FILE, "r") as f:
+            with open(GUI_CONFIG_FILE, "r", encoding="utf-8") as f:
                 cfg = json.load(f)
 
             # ── Migrate from old two-field layout (save_path + downloads_dir
@@ -557,7 +557,7 @@ class JamabandiGUI:
         )
 
         try:
-            text = main_path.read_text()
+            text = main_path.read_text(encoding="utf-8")
 
             # Find and replace the CONFIG block using a regex
             import re
@@ -568,7 +568,7 @@ class JamabandiGUI:
                 return False
             text = re.sub(pattern, new_config_block, text, count=1)
 
-            main_path.write_text(text)
+            main_path.write_text(text, encoding="utf-8")
             self._log(f"Updated CONFIG in http_scraper.py.\n")
             self._log(f"Downloads dir: {downloads_dir}\n")
             return True
