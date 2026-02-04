@@ -1,0 +1,141 @@
+# Jamabandi Land Records Scraper
+
+Download Jamabandi (land records) from **jamabandi.nic.in** as PDF files.
+
+This tool logs into the Jamabandi website using your session cookie, downloads all
+Nakal records for a village as HTML, and converts them to landscape PDF files
+automatically.
+
+---
+
+## Quick Start
+
+### Step 1 - Install
+
+1. Make sure **Python 3.10+** is installed on your computer
+   - **Mac:** comes pre-installed, or run `brew install python`
+   - **Windows:** download from https://www.python.org/downloads/
+
+2. Double-click the installer for your system:
+   - **Mac:** `Install Dependencies.command`
+   - **Windows:** `Install Dependencies.cmd`
+
+   This creates a virtual environment and installs all required packages.
+
+### Step 2 - Get Your Session Cookie
+
+The Jamabandi website requires login. The scraper needs your session cookie to
+download records on your behalf.
+
+1. Open **https://jamabandi.nic.in** in your browser and **log in**
+2. Open Developer Tools (press `F12` or `Cmd+Option+I` on Mac)
+3. Go to the **Application** tab (Chrome) or **Storage** tab (Firefox)
+4. Under **Cookies**, click on `https://jamabandi.nic.in`
+5. Find the cookie named `ASP.NET_SessionId` (or similar session cookie)
+6. Copy its **Value** (e.g. `c1l3rgujedy2qgc5gycc5ehx`)
+
+### Step 3 - Run
+
+1. Double-click the launcher:
+   - **Mac:** `Jamabandi Scraper.command`
+   - **Windows:** `Jamabandi Scraper.cmd`
+
+2. The GUI window will open. Fill in:
+   - **District Code** (e.g. `17` for Sirsa)
+   - **Tehsil Code** (e.g. `102`)
+   - **Village Code** (e.g. `05464`)
+   - **Period** (e.g. `2024-2025`)
+   - **Khewat Start / End** (range of khewat numbers to download)
+   - **Session Cookie** (paste the value from Step 2)
+
+3. Click **Start Scraping**
+
+4. The tool will:
+   - Download each khewat record as HTML
+   - Show real-time progress in the progress bar
+   - Automatically convert all HTML files to PDF when done
+   - Delete the HTML files after successful conversion
+
+5. Your PDF files will be in the `downloads_<village_code>/` folder.
+
+---
+
+## GUI Overview
+
+| Section | What it does |
+|---------|-------------|
+| **Main Settings** | District, tehsil, village, period, khewat range, cookie |
+| **Downloads Path** | Where PDFs are saved. Leave blank to auto-create `downloads_<village>` |
+| **Concurrent Downloads** | Enable to use 3-8 parallel workers (faster but more load on server) |
+| **Advanced Settings** | Click `+` to expand, then `Unlock` (password: `admin123`) to adjust delays, retries, timeouts |
+| **PDF Conversion** | Input/output dirs and worker count for manual conversion |
+| **Start Scraping** | Begin downloading records |
+| **Convert HTML to PDF** | Manually convert HTML files if auto-convert was off |
+| **Stop** | Stop the running process |
+| **Progress Bar** | Shows download/conversion progress with counts |
+| **Log Output** | Live output from the scraper |
+
+---
+
+## Tips
+
+- **Session cookies expire.** If you get errors about expired sessions, log in
+  again on the website and paste the new cookie value.
+
+- **Resume support.** If the scraper is interrupted, just run it again with the
+  same settings. It automatically skips already-downloaded khewats using a
+  progress file stored in the downloads folder.
+
+- **Concurrent mode** is faster but uses more connections. Start with the default
+  (sequential) if you are unsure.
+
+- **PDFs are landscape A4** to fit the 12-column Jamabandi table without clipping.
+
+---
+
+## Project Structure
+
+```
+jamabandi-scraper/
+├── run.py                          # Entry point (launches the GUI)
+├── requirements.txt                # Python dependencies
+├── Install Dependencies.command    # Mac installer (double-click)
+├── Install Dependencies.cmd        # Windows installer (double-click)
+├── Jamabandi Scraper.command       # Mac launcher (double-click)
+├── Jamabandi Scraper.cmd           # Windows launcher (double-click)
+└── scraper/
+    ├── gui.py                      # GUI application
+    ├── http_scraper.py             # HTTP-based scraper
+    ├── pdf_converter.py            # HTML to PDF converter
+    └── selenium_scraper.py         # Selenium-based scraper (legacy)
+```
+
+---
+
+## Running from Terminal (Advanced)
+
+If you prefer the command line over the GUI:
+
+```bash
+# Activate the virtual environment
+source venv/bin/activate        # Mac/Linux
+venv\Scripts\activate           # Windows
+
+# Launch the GUI
+python run.py
+
+# Or run the scraper directly
+python scraper/http_scraper.py --cookie YOUR_COOKIE --start 1 --end 100
+
+# Convert HTML to PDF manually
+python scraper/pdf_converter.py --input downloads_05464 --workers 4 --delete-html
+```
+
+---
+
+## Requirements
+
+- Python 3.10 or newer
+- tkinter (usually included with Python; on Mac: `brew install python-tk`)
+- Internet connection to access jamabandi.nic.in
+- A valid login session on the Jamabandi website
