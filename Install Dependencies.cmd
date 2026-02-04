@@ -49,7 +49,7 @@ echo ============================================
 echo   Setup complete!
 echo ============================================
 echo.
-echo To launch the GUI, double-click:
+echo To launch the app, double-click:
 echo   Jamabandi Scraper.cmd
 echo.
 pause

@@ -1,10 +1,23 @@
+# Virtual environment
 venv/
+
+# Python cache
 __pycache__/
-.ruff_cache/
+*.pyc
+
+# macOS
 .DS_Store
+
+# Linter cache
+.ruff_cache/
+
+# Downloaded data (HTML/PDF files)
 downloads*/
+
+# User-specific config and state
 progress*.json
 gui_config.json
+
+# Logs and debug output
 scrape.log
 debug_form.html
-*.pyc
