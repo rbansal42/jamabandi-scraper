@@ -168,9 +168,9 @@ class JamabandiScraper:
         chrome_options.add_argument("--disable-dev-shm-usage")
         chrome_options.add_argument("--window-size=1920,1080")
 
-        # Set a realistic user agent
+        # Set a realistic user agent (Windows UA works across platforms)
         chrome_options.add_argument(
-            "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         )
 
@@ -235,7 +235,7 @@ class JamabandiScraper:
             alert_text = alert.text
             alert.accept()
             return alert_text
-        except:
+        except Exception:
             return None
 
     def _safe_get_current_url(self):
@@ -243,7 +243,7 @@ class JamabandiScraper:
         try:
             self._dismiss_alert_if_present()
             return self.driver.current_url
-        except:
+        except Exception:
             return ""
 
     def authenticate(self) -> bool:
@@ -317,7 +317,7 @@ class JamabandiScraper:
                 lambda d: len(Select(d.find_element(By.ID, element_id)).options) > 1
             )
             return True
-        except:
+        except Exception:
             return False
 
     def _select_dropdown(self, element_id: str, value: str, wait_after: float = 2.0):
@@ -518,12 +518,12 @@ class JamabandiScraper:
             try:
                 nakal_btn = self._wait_for_clickable(By.NAME, "Cmdnakal", timeout=5)
                 nakal_btn.click()
-            except:
+            except Exception:
                 # Try alternative selectors
                 try:
                     nakal_btn = self._wait_for_clickable(By.ID, "Cmdnakal", timeout=5)
                     nakal_btn.click()
-                except:
+                except Exception:
                     # Try by value
                     nakal_btn = self.driver.find_element(
                         By.XPATH, "//input[@value='Nakal']"
@@ -550,7 +550,7 @@ class JamabandiScraper:
                     or "no record" in d.page_source.lower()
                     or "nakal" in d.page_source.lower()
                 )
-            except:
+            except Exception:
                 pass  # Continue anyway
 
             # Additional wait for content rendering

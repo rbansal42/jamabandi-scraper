@@ -47,7 +47,7 @@ CONFIG = {
     "max_retries": 3,
     "page_load_timeout": 30,
     "form_postback_sleep": 0.25,
-    "downloads_dir": "/Volumes/Code/script/downloads_02556",
+    "downloads_dir": "downloads",
     "progress_file": "progress.json",
 }
 
@@ -57,7 +57,7 @@ FORM_URL = f"{BASE_URL}/PublicNakal/CreateNewRequest"
 
 # Headers to mimic browser
 HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:147.0) Gecko/20100101 Firefox/147.0",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Accept-Encoding": "gzip, deflate, br",
@@ -80,6 +80,10 @@ class ProgressTracker:
 
     def __init__(self, filepath: str):
         self.filepath = Path(filepath)
+        # Resolve relative paths against the script's directory so that
+        # "progress.json" doesn't land in an arbitrary CWD.
+        if not self.filepath.is_absolute():
+            self.filepath = Path(__file__).parent / self.filepath
         self.data = {"config": {}, "completed": [], "failed": {}, "last_updated": None}
         self._lock = threading.Lock()
         self.load()
@@ -333,9 +337,10 @@ class JamabandiHTTPScraper:
         else:
             print("  Warning: Khewat dropdown not found after setup")
             # Save response for debugging
-            with open("debug_form.html", "w", encoding="utf-8") as f:
+            debug_path = self.downloads_dir / "debug_form.html"
+            with open(debug_path, "w", encoding="utf-8") as f:
                 f.write(response.text)
-            print("  Saved response to debug_form.html")
+            print(f"  Saved response to {debug_path}")
             return False
 
     def download_nakal(self, khewat: int) -> bool:
@@ -771,7 +776,7 @@ def auto_convert_to_pdf(downloads_dir: str):
         with ProcessPoolExecutor(
             max_workers=pdf_workers,
             initializer=_init_worker,
-            initargs=(shared_counter, shared_total),
+            initargs=(shared_counter, shared_total, False),
         ) as executor:
             futures = {}
             for wid, batch in enumerate(batches):
