@@ -81,7 +81,7 @@ class ProgressTracker:
         """Load progress from file if exists."""
         if self.filepath.exists():
             try:
-                with open(self.filepath, "r") as f:
+                with open(self.filepath, "r", encoding="utf-8") as f:
                     self.data = json.load(f)
                 print(
                     f"Loaded progress: {len(self.data['completed'])} completed, "
@@ -93,7 +93,7 @@ class ProgressTracker:
     def save(self):
         """Save progress to file."""
         self.data["last_updated"] = datetime.now().isoformat()
-        with open(self.filepath, "w") as f:
+        with open(self.filepath, "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=2)
 
     def set_config(self, config: dict):

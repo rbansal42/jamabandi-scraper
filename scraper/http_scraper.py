@@ -47,7 +47,7 @@ CONFIG = {
     "max_retries": 3,
     "page_load_timeout": 30,
     "form_postback_sleep": 0.25,
-    "downloads_dir": "/Volumes/Code/script/02566",
+    "downloads_dir": "/Volumes/Code/script/downloads_02556",
     "progress_file": "progress.json",
 }
 
@@ -87,7 +87,7 @@ class ProgressTracker:
     def load(self):
         if self.filepath.exists():
             try:
-                with open(self.filepath, "r") as f:
+                with open(self.filepath, "r", encoding="utf-8") as f:
                     self.data = json.load(f)
                 print(
                     f"Loaded progress: {len(self.data['completed'])} completed, "
@@ -98,7 +98,7 @@ class ProgressTracker:
 
     def save(self):
         self.data["last_updated"] = datetime.now().isoformat()
-        with open(self.filepath, "w") as f:
+        with open(self.filepath, "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=2)
 
     def set_config(self, config: dict):
@@ -333,7 +333,7 @@ class JamabandiHTTPScraper:
         else:
             print("  Warning: Khewat dropdown not found after setup")
             # Save response for debugging
-            with open("debug_form.html", "w") as f:
+            with open("debug_form.html", "w", encoding="utf-8") as f:
                 f.write(response.text)
             print("  Saved response to debug_form.html")
             return False
