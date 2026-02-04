@@ -816,6 +816,7 @@ class JamabandiGUI:
             "--workers",
             str(workers),
             "--skip-existing",
+            "--delete-html",
         ]
         if output_dir:
             cmd += ["--output", output_dir]
