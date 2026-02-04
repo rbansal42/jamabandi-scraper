@@ -161,16 +161,18 @@ class JamabandiHTTPScraper:
         self.downloads_dir = Path(config["downloads_dir"])
         self.downloads_dir.mkdir(exist_ok=True)
 
-        # Create session with cookie.
-        # Do NOT scope to a specific domain — the site may redirect between
-        # jamabandi.nic.in / www.jamabandi.nic.in and a domain-scoped cookie
-        # would be silently dropped on the redirect target.
+        # Send cookie as a raw header instead of using the cookie jar.
+        # On Windows, system proxies / cookie-jar domain matching can
+        # silently strip cookies. A raw header is always forwarded.
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
-        self.session.cookies.set("jamabandiID", session_cookie)
+        self.session.headers["Cookie"] = f"jamabandiID={session_cookie}"
 
-        # Disable SSL verification (site has certificate issues)
+        # Disable SSL verification (site has certificate issues).
+        # trust_env=False stops requests from picking up Windows system
+        # proxy settings that can intercept/modify HTTPS traffic.
         self.session.verify = False
+        self.session.trust_env = False
         # Suppress SSL warnings
         import urllib3
 
