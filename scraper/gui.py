@@ -28,7 +28,6 @@ DEFAULTS = {
     "khewat_end": 100,
     "downloads_dir": "",
     "session_cookie": "",
-    "progress_file": "progress.json",
     "concurrent_enabled": False,
     "concurrent_workers": 3,
     "min_delay": 1.0,
@@ -149,17 +148,6 @@ class JamabandiGUI:
             row=row + 1, column=1, columnspan=2, sticky=tk.W, pady=0
         )
         row += 2
-
-        # Progress file
-        ttk.Label(main_frame, text="Progress File:").grid(
-            row=row, column=0, sticky=tk.W, padx=(0, 4), pady=2
-        )
-        var_pf = tk.StringVar(value=DEFAULTS["progress_file"])
-        self.vars["progress_file"] = var_pf
-        ttk.Entry(main_frame, textvariable=var_pf, width=30).grid(
-            row=row, column=1, columnspan=2, sticky=tk.W, pady=2
-        )
-        row += 1
 
         # Session cookie (full width)
         ttk.Label(main_frame, text="Session Cookie:").grid(
@@ -546,6 +534,10 @@ class JamabandiGUI:
         cfg = self._get_config()
         downloads_dir = self._resolve_downloads_dir(cfg)
 
+        # Auto-generate progress file inside the downloads directory
+        village = cfg["village_code"].strip() or "unknown"
+        progress_file = str(Path(downloads_dir) / f"progress_{village}.json")
+
         new_config_block = (
             "CONFIG = {\n"
             f'    "district_code": "{cfg["district_code"]}",\n'
@@ -560,7 +552,7 @@ class JamabandiGUI:
             f'    "page_load_timeout": {cfg["page_load_timeout"]},\n'
             f'    "form_postback_sleep": {cfg["form_postback_sleep"]},\n'
             f'    "downloads_dir": "{downloads_dir}",\n'
-            f'    "progress_file": "{cfg["progress_file"]}",\n'
+            f'    "progress_file": "{progress_file}",\n'
             "}"
         )
 
