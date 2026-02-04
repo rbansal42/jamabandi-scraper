@@ -36,18 +36,18 @@ from bs4 import BeautifulSoup
 # ═══════════════════════════════════════════════════════════════════════════════
 
 CONFIG = {
-    "district_code": "17",  # Sirsa
+    "district_code": "17",
     "tehsil_code": "102",
-    "village_code": "05464",
-    "period": "2024-2025",
+    "village_code": "02556",
+    "period": "2022-2023",
     "khewat_start": 1,
-    "khewat_end": 883,
-    "min_delay": 1,  # seconds between requests
-    "max_delay": 2.5,  # seconds between requests
-    "max_retries": 3,  # retry attempts per khewat
+    "khewat_end": 100,
+    "min_delay": 1.0,
+    "max_delay": 2.5,
+    "max_retries": 3,
     "page_load_timeout": 30,
     "form_postback_sleep": 0.25,
-    "downloads_dir": "downloads_05464",
+    "downloads_dir": "/Volumes/Code/script/02566",
     "progress_file": "progress.json",
 }
 
