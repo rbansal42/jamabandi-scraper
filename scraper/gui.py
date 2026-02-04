@@ -25,7 +25,6 @@ DEFAULTS = {
     "period": "2024-2025",
     "khewat_start": 1,
     "khewat_end": 100,
-    "save_path": "",
     "downloads_dir": "",
     "session_cookie": "",
     "progress_file": "progress.json",
@@ -131,33 +130,22 @@ class JamabandiGUI:
         )
         row += 1
 
-        # Save Path (base directory for all downloads)
-        ttk.Label(main_frame, text="Save Path:").grid(
-            row=row, column=0, sticky=tk.W, padx=(0, 4), pady=2
-        )
-        var_sp = tk.StringVar(value=DEFAULTS["save_path"])
-        self.vars["save_path"] = var_sp
-        ttk.Entry(main_frame, textvariable=var_sp, width=40).grid(
-            row=row, column=1, columnspan=2, sticky=tk.EW, pady=2
-        )
-        ttk.Button(
-            main_frame, text="Browse...", command=lambda: self._browse_dir(var_sp)
-        ).grid(row=row, column=3, sticky=tk.W, padx=(4, 0), pady=2)
-        row += 1
-
-        # Downloads folder name (created inside Save Path)
-        ttk.Label(main_frame, text="Folder Name:").grid(
+        # Downloads Path (full path to the downloads directory)
+        ttk.Label(main_frame, text="Downloads Path:").grid(
             row=row, column=0, sticky=tk.W, padx=(0, 4), pady=2
         )
         var_dl = tk.StringVar(value=DEFAULTS["downloads_dir"])
         self.vars["downloads_dir"] = var_dl
-        ttk.Entry(main_frame, textvariable=var_dl, width=30).grid(
-            row=row, column=1, columnspan=2, sticky=tk.W, pady=2
+        ttk.Entry(main_frame, textvariable=var_dl, width=40).grid(
+            row=row, column=1, columnspan=2, sticky=tk.EW, pady=2
         )
-        ttk.Label(main_frame, text="(auto-generated if blank)").grid(
-            row=row, column=3, sticky=tk.W, padx=(4, 0), pady=2
+        ttk.Button(
+            main_frame, text="Browse...", command=lambda: self._browse_dir(var_dl)
+        ).grid(row=row, column=3, sticky=tk.W, padx=(4, 0), pady=2)
+        ttk.Label(main_frame, text="(auto: downloads_<village> if blank)").grid(
+            row=row + 1, column=1, columnspan=2, sticky=tk.W, pady=0
         )
-        row += 1
+        row += 2
 
         # Progress file
         ttk.Label(main_frame, text="Progress File:").grid(
@@ -459,6 +447,24 @@ class JamabandiGUI:
         try:
             with open(GUI_CONFIG_FILE, "r") as f:
                 cfg = json.load(f)
+
+            # ── Migrate from old two-field layout (save_path + downloads_dir
+            #    as folder name) to single downloads_dir full-path field ──
+            if "save_path" in cfg:
+                old_save = cfg.pop("save_path", "").strip()
+                old_folder = cfg.get("downloads_dir", "").strip()
+                # If downloads_dir looks like a bare folder name (no slashes)
+                # and save_path was set, combine them into a full path.
+                if (
+                    old_save
+                    and old_folder
+                    and "/" not in old_folder
+                    and "\\" not in old_folder
+                ):
+                    cfg["downloads_dir"] = str(Path(old_save) / old_folder)
+                elif old_save and not old_folder:
+                    cfg["downloads_dir"] = old_save
+
             for key, value in cfg.items():
                 if key in self.vars:
                     self.vars[key].set(value)
@@ -472,12 +478,24 @@ class JamabandiGUI:
     # ─────────────────────────────────────────────────────────────────────
 
     def _resolve_downloads_dir(self, cfg: dict) -> str:
-        """Build the effective downloads directory path from GUI fields."""
-        folder_name = cfg["downloads_dir"] or f"downloads_{cfg['village_code']}"
-        save_path = cfg.get("save_path", "").strip()
-        if save_path:
-            return str(Path(save_path) / folder_name)
-        return folder_name
+        """Return the effective downloads directory path.
+
+        If the user specified a full path, use it directly.
+        Otherwise auto-generate ``downloads_<village_code>`` relative to
+        PROJECT_DIR.
+        """
+        user_dir = cfg.get("downloads_dir", "").strip()
+        if user_dir:
+            # User supplied a path — use it as-is (may be absolute or relative)
+            p = Path(user_dir)
+            if not p.is_absolute():
+                p = PROJECT_DIR / p
+            return str(p)
+        # Auto-generate from village code
+        village = cfg.get("village_code", "").strip()
+        if village:
+            return str(PROJECT_DIR / f"downloads_{village}")
+        return str(PROJECT_DIR / "downloads")
 
     def _patch_main_http_config(self) -> bool:
         """
