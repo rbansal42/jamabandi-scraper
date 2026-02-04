@@ -38,17 +38,17 @@ from bs4 import BeautifulSoup
 CONFIG = {
     "district_code": "17",
     "tehsil_code": "102",
-    "village_code": "02556",
-    "period": "2022-2023",
+    "village_code": "02532",
+    "period": "2023-2024",
     "khewat_start": 1,
-    "khewat_end": 100,
+    "khewat_end": 1099,
     "min_delay": 1.0,
     "max_delay": 2.5,
     "max_retries": 3,
     "page_load_timeout": 30,
     "form_postback_sleep": 0.25,
-    "downloads_dir": "downloads",
-    "progress_file": "progress.json",
+    "downloads_dir": "/Volumes/Code/script/downloads_02532",
+    "progress_file": "/Volumes/Code/script/downloads_02532/progress_02532.json",
 }
 
 # URLs
@@ -161,12 +161,13 @@ class JamabandiHTTPScraper:
         self.downloads_dir = Path(config["downloads_dir"])
         self.downloads_dir.mkdir(exist_ok=True)
 
-        # Create session with cookie
+        # Create session with cookie.
+        # Do NOT scope to a specific domain — the site may redirect between
+        # jamabandi.nic.in / www.jamabandi.nic.in and a domain-scoped cookie
+        # would be silently dropped on the redirect target.
         self.session = requests.Session()
         self.session.headers.update(HEADERS)
-        self.session.cookies.set(
-            "jamabandiID", session_cookie, domain="jamabandi.nic.in"
-        )
+        self.session.cookies.set("jamabandiID", session_cookie)
 
         # Disable SSL verification (site has certificate issues)
         self.session.verify = False
@@ -241,7 +242,13 @@ class JamabandiHTTPScraper:
             return False
 
         if not self._check_logged_in(response.text):
-            print("  Session invalid - not logged in!")
+            # Show diagnostic info to help debug cookie / redirect issues
+            print(f"  Session invalid - not logged in!")
+            print(f"  Final URL: {response.url}")
+            if response.history:
+                print(f"  Redirects: {' -> '.join(r.url for r in response.history)}")
+            snippet = response.text[:500].replace("\n", " ").strip()
+            print(f"  Response snippet: {snippet[:200]}...")
             return False
 
         if not self._parse_asp_tokens(response.text):
