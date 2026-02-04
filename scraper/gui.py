@@ -538,6 +538,12 @@ class JamabandiGUI:
         village = cfg["village_code"].strip() or "unknown"
         progress_file = str(Path(downloads_dir) / f"progress_{village}.json")
 
+        # Use forward slashes in paths so Python doesn't interpret
+        # backslashes as escape sequences (e.g. \Users -> \U = bad escape).
+        # Python's pathlib / os.path handle forward slashes fine on Windows.
+        safe_downloads = downloads_dir.replace("\\", "/")
+        safe_progress = progress_file.replace("\\", "/")
+
         new_config_block = (
             "CONFIG = {\n"
             f'    "district_code": "{cfg["district_code"]}",\n'
@@ -551,8 +557,8 @@ class JamabandiGUI:
             f'    "max_retries": {cfg["max_retries"]},\n'
             f'    "page_load_timeout": {cfg["page_load_timeout"]},\n'
             f'    "form_postback_sleep": {cfg["form_postback_sleep"]},\n'
-            f'    "downloads_dir": "{downloads_dir}",\n'
-            f'    "progress_file": "{progress_file}",\n'
+            f'    "downloads_dir": "{safe_downloads}",\n'
+            f'    "progress_file": "{safe_progress}",\n'
             "}"
         )
 
