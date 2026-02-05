@@ -10,6 +10,17 @@ from .logger import get_logger
 
 logger = get_logger("validator")
 
+# Optional pypdf for deep PDF validation
+try:
+    from pypdf import PdfReader
+    from pypdf.errors import PdfReadError
+
+    PYPDF_AVAILABLE = True
+except ImportError:
+    PYPDF_AVAILABLE = False
+    PdfReader = None
+    PdfReadError = Exception
+
 
 class ValidationStatus(Enum):
     VALID = "valid"
@@ -28,6 +39,7 @@ class PDFValidator:
     """Validates PDF files."""
 
     PDF_HEADER = b"%PDF-"
+    PDF_EOF_MARKER = b"%%EOF"
     MIN_SIZE_BYTES = 10 * 1024  # 10KB minimum
 
     HTML_ERROR_PATTERNS = [
@@ -38,8 +50,18 @@ class PDFValidator:
         r"access\s+denied",
     ]
 
+    def __init__(self, deep_validation: bool = True):
+        """
+        Initialize PDF validator.
+
+        Args:
+            deep_validation: If True and pypdf is available, perform deep
+                validation (page count, structure). If False, only basic checks.
+        """
+        self.deep_validation = deep_validation and PYPDF_AVAILABLE
+
     def validate_pdf(self, pdf_path: Path) -> ValidationResult:
-        """Validate a PDF file."""
+        """Validate a PDF file with basic checks."""
         if not pdf_path.exists():
             return ValidationResult(ValidationStatus.INVALID, "File does not exist")
 
@@ -60,6 +82,72 @@ class PDFValidator:
             return ValidationResult(ValidationStatus.INVALID, f"Read error: {e}")
 
         return ValidationResult(ValidationStatus.VALID, "PDF is valid", {"size": size})
+
+    def validate_pdf_deep(self, pdf_path: Path) -> ValidationResult:
+        """
+        Perform deep PDF validation including structure and page count.
+
+        Falls back to basic validation if pypdf is not available.
+        """
+        # First do basic validation
+        basic_result = self.validate_pdf(pdf_path)
+        if basic_result.status == ValidationStatus.INVALID:
+            return basic_result
+
+        size = pdf_path.stat().st_size
+
+        # Check for EOF marker (basic structural check)
+        try:
+            with open(pdf_path, "rb") as f:
+                f.seek(-128, 2)  # Read last 128 bytes
+                tail = f.read()
+            if self.PDF_EOF_MARKER not in tail:
+                return ValidationResult(
+                    ValidationStatus.WARNING,
+                    "PDF missing EOF marker (may be truncated)",
+                    {"size": size},
+                )
+        except Exception:
+            pass  # File too small, skip this check
+
+        # Deep validation with pypdf if available
+        if self.deep_validation and PYPDF_AVAILABLE:
+            try:
+                reader = PdfReader(pdf_path)
+                page_count = len(reader.pages)
+
+                if page_count == 0:
+                    return ValidationResult(
+                        ValidationStatus.INVALID,
+                        "PDF has no pages",
+                        {"size": size, "pages": 0},
+                    )
+
+                # Try to access first page to ensure it's readable
+                _ = reader.pages[0]
+
+                logger.debug(f"PDF validated: {pdf_path.name} ({page_count} pages)")
+                return ValidationResult(
+                    ValidationStatus.VALID,
+                    f"PDF is valid ({page_count} pages)",
+                    {"size": size, "pages": page_count},
+                )
+
+            except PdfReadError as e:
+                return ValidationResult(
+                    ValidationStatus.INVALID,
+                    f"PDF structure error: {e}",
+                    {"size": size},
+                )
+            except Exception as e:
+                logger.warning(f"Deep validation failed for {pdf_path}: {e}")
+                # Fall through to return basic result
+
+        return ValidationResult(
+            ValidationStatus.VALID,
+            "PDF is valid (basic check)",
+            {"size": size},
+        )
 
     def validate_html_content(self, html: str) -> ValidationResult:
         """Validate HTML content for error patterns."""
@@ -96,3 +184,21 @@ def validate_download(html: str, pdf_path: Optional[Path] = None) -> ValidationR
             return pdf_result
 
     return ValidationResult(ValidationStatus.VALID, "Download validated")
+
+
+def validate_converted_pdf(pdf_path: Path, deep: bool = True) -> ValidationResult:
+    """
+    Validate a PDF after conversion.
+
+    Args:
+        pdf_path: Path to the converted PDF file.
+        deep: If True, perform deep validation (page count, structure).
+
+    Returns:
+        ValidationResult with status and details.
+    """
+    validator = PDFValidator(deep_validation=deep)
+
+    if deep:
+        return validator.validate_pdf_deep(pdf_path)
+    return validator.validate_pdf(pdf_path)

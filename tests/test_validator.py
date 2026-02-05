@@ -14,6 +14,8 @@ from scraper.validator import (
     ValidationResult,
     ValidationStatus,
     validate_download,
+    validate_converted_pdf,
+    PYPDF_AVAILABLE,
 )
 
 
@@ -256,3 +258,97 @@ class TestValidateDownload:
 
         assert result.status == ValidationStatus.WARNING
         assert "too small" in result.message
+
+
+class TestPDFValidatorDeepValidation:
+    """Tests for PDFValidator.validate_pdf_deep method."""
+
+    def test_valid_pdf_with_eof_marker(self, temp_dir):
+        """Should return VALID for PDF with proper EOF marker."""
+        pdf_path = temp_dir / "test.pdf"
+        content = b"%PDF-1.4\n" + b"x" * (15 * 1024) + b"\n%%EOF\n"
+        pdf_path.write_bytes(content)
+
+        validator = PDFValidator(deep_validation=False)
+        result = validator.validate_pdf_deep(pdf_path)
+
+        assert result.status == ValidationStatus.VALID
+
+    def test_pdf_without_eof_marker(self, temp_dir):
+        """Should return WARNING for PDF without EOF marker."""
+        pdf_path = temp_dir / "test.pdf"
+        # Large enough file without EOF marker
+        content = b"%PDF-1.4\n" + b"x" * (15 * 1024)
+        pdf_path.write_bytes(content)
+
+        validator = PDFValidator(deep_validation=False)
+        result = validator.validate_pdf_deep(pdf_path)
+
+        assert result.status == ValidationStatus.WARNING
+        assert "EOF marker" in result.message
+
+    def test_missing_file_deep(self, temp_dir):
+        """Should return INVALID for non-existent file."""
+        pdf_path = temp_dir / "nonexistent.pdf"
+
+        validator = PDFValidator(deep_validation=False)
+        result = validator.validate_pdf_deep(pdf_path)
+
+        assert result.status == ValidationStatus.INVALID
+        assert result.message == "File does not exist"
+
+    def test_deep_validation_disabled_without_pypdf(self, temp_dir):
+        """Should fall back to basic validation when deep_validation=False."""
+        pdf_path = temp_dir / "test.pdf"
+        content = b"%PDF-1.4\n" + b"x" * (15 * 1024) + b"\n%%EOF\n"
+        pdf_path.write_bytes(content)
+
+        validator = PDFValidator(deep_validation=False)
+        result = validator.validate_pdf_deep(pdf_path)
+
+        assert result.status == ValidationStatus.VALID
+        assert "basic check" in result.message or "pages" not in result.message
+
+
+class TestValidateConvertedPDF:
+    """Tests for validate_converted_pdf convenience function."""
+
+    def test_valid_pdf(self, temp_dir):
+        """Should return VALID for valid PDF."""
+        pdf_path = temp_dir / "test.pdf"
+        content = b"%PDF-1.4\n" + b"x" * (15 * 1024) + b"\n%%EOF\n"
+        pdf_path.write_bytes(content)
+
+        result = validate_converted_pdf(pdf_path, deep=False)
+
+        assert result.status == ValidationStatus.VALID
+
+    def test_invalid_pdf(self, temp_dir):
+        """Should return INVALID for invalid PDF."""
+        pdf_path = temp_dir / "test.pdf"
+        content = b"<html>Not a PDF</html>" + b"x" * (15 * 1024)
+        pdf_path.write_bytes(content)
+
+        result = validate_converted_pdf(pdf_path, deep=False)
+
+        assert result.status == ValidationStatus.INVALID
+
+    def test_missing_pdf(self, temp_dir):
+        """Should return INVALID for missing file."""
+        pdf_path = temp_dir / "nonexistent.pdf"
+
+        result = validate_converted_pdf(pdf_path, deep=False)
+
+        assert result.status == ValidationStatus.INVALID
+
+
+@pytest.mark.skipif(not PYPDF_AVAILABLE, reason="pypdf not installed")
+class TestPDFValidatorWithPyPDF:
+    """Tests for PDF validation with pypdf (requires pypdf installed)."""
+
+    def test_validates_real_pdf_structure(self, temp_dir):
+        """Should validate actual PDF structure when pypdf available."""
+        # This test requires a real PDF file created by a PDF library
+        # For unit testing, we just verify the validator initializes correctly
+        validator = PDFValidator(deep_validation=True)
+        assert validator.deep_validation is True

@@ -22,6 +22,13 @@ from .validator import (
     ValidationStatus,
     ValidationResult,
     validate_download,
+    validate_converted_pdf,
+)
+from .update_checker import (
+    UpdateChecker,
+    UpdateInfo,
+    check_for_updates,
+    get_current_version,
 )
 from .pdf_backend import (
     PDFBackend,

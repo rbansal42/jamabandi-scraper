@@ -21,4 +21,8 @@ gui_config.json
 # Logs and debug output
 scrape.log
 debug_form.html
+logs/
+*.zip
+
+# Worktrees
 .worktrees/

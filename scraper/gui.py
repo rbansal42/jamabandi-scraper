@@ -17,6 +17,7 @@ from tkinter import filedialog, messagebox, simpledialog, ttk
 
 from .config import get_config
 from .logger import setup_logging, get_logger
+from .update_checker import UpdateChecker, UpdateInfo, get_current_version
 
 SRC_DIR = Path(__file__).parent.resolve()  # scraper/ — where .py files live
 PROJECT_DIR = SRC_DIR.parent.resolve()  # project root — data & config here
@@ -124,6 +125,9 @@ class JamabandiGUI:
         self._build_ui()
         self._load_config()
         self.logger.info("GUI initialized")
+
+        # Check for updates on startup (async, non-blocking)
+        self._check_for_updates()
 
     # ─────────────────────────────────────────────────────────────────────
     # UI CONSTRUCTION
@@ -628,6 +632,46 @@ class JamabandiGUI:
             self._toggle_concurrent()
         except Exception as e:
             print(f"Warning: could not load config: {e}")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # UPDATE CHECKER
+    # ─────────────────────────────────────────────────────────────────────
+
+    def _check_for_updates(self):
+        """Check for updates asynchronously on startup."""
+        checker = UpdateChecker()
+        checker.check_async(callback=self._on_update_check_complete)
+
+    def _on_update_check_complete(self, info: UpdateInfo):
+        """Handle update check result (called from background thread)."""
+        if info.is_update_available:
+            # Schedule GUI update on main thread
+            self.root.after(0, lambda: self._show_update_notification(info))
+
+    def _show_update_notification(self, info: UpdateInfo):
+        """Show update notification dialog."""
+        import webbrowser
+
+        message = (
+            f"A new version of Jamabandi Scraper is available!\n\n"
+            f"Current version: {info.current_version}\n"
+            f"Latest version: {info.latest_version}\n\n"
+            f"Would you like to open the download page?"
+        )
+
+        result = messagebox.askyesno(
+            "Update Available",
+            message,
+            icon=messagebox.INFO,
+        )
+
+        if result:
+            webbrowser.open(info.release_url)
+
+        self.logger.info(f"Update available: v{info.latest_version}")
+        self._log(
+            f"Update available: v{info.latest_version} (current: v{info.current_version})\n"
+        )
 
     # ─────────────────────────────────────────────────────────────────────
     # UPDATE http_scraper.py CONFIG BLOCK
