@@ -15,31 +15,39 @@ import tkinter as tk
 from pathlib import Path
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
+from .config import get_config
+from .logger import setup_logging, get_logger
+
 SRC_DIR = Path(__file__).parent.resolve()  # scraper/ — where .py files live
 PROJECT_DIR = SRC_DIR.parent.resolve()  # project root — data & config here
 GUI_CONFIG_FILE = PROJECT_DIR / "gui_config.json"
 
-DEFAULTS = {
-    "district_code": "17",
-    "tehsil_code": "102",
-    "village_code": "",
-    "period": "2024-2025",
-    "khewat_start": 1,
-    "khewat_end": 100,
-    "downloads_dir": "",
-    "session_cookie": "",
-    "concurrent_enabled": False,
-    "concurrent_workers": 3,
-    "min_delay": 1.0,
-    "max_delay": 2.5,
-    "max_retries": 3,
-    "page_load_timeout": 30,
-    "form_postback_sleep": 0.25,
-    "auto_convert_pdf": True,
-    "pdf_input_dir": "",
-    "pdf_output_dir": "",
-    "pdf_workers": 4,
-}
+
+def _get_gui_defaults() -> dict:
+    """Get GUI defaults from config."""
+    config = get_config()
+    return {
+        "district_code": "17",
+        "tehsil_code": "102",
+        "village_code": "",
+        "period": "2023-2024",
+        "khewat_start": 1,
+        "khewat_end": 100,
+        "min_delay": config.delays.get("min_delay", 1.0),
+        "max_delay": config.delays.get("max_delay", 2.5),
+        "max_retries": config.retry.get("max_retries", 3),
+        "page_load_timeout": config.http.get("timeout", 30),
+        "form_postback_sleep": config.delays.get("form_postback_sleep", 0.25),
+        "session_cookie": "",
+        "downloads_dir": "",
+        "concurrent_enabled": False,
+        "concurrent_workers": config.concurrency.get("default_workers", 3),
+        "auto_convert_pdf": True,
+        "pdf_input_dir": "",
+        "pdf_output_dir": "",
+        "pdf_workers": 4,
+    }
+
 
 # Not a security measure — prevents accidental edits by end-users only.
 ADVANCED_PASSWORD = "admin123"
@@ -70,6 +78,10 @@ class JamabandiGUI:
         self.root.minsize(720, 860)
         self.root.geometry("800x1000")
 
+        # Initialize logging (console=False since GUI has its own log display)
+        setup_logging(console=False)
+        self.logger = get_logger("gui")
+
         self.process: subprocess.Popen | None = None
         self.thread: threading.Thread | None = None
         self.advanced_unlocked = False
@@ -81,12 +93,16 @@ class JamabandiGUI:
 
         self._build_ui()
         self._load_config()
+        self.logger.info("GUI initialized")
 
     # ─────────────────────────────────────────────────────────────────────
     # UI CONSTRUCTION
     # ─────────────────────────────────────────────────────────────────────
 
     def _build_ui(self):
+        # Get defaults from config
+        defaults = _get_gui_defaults()
+
         style = ttk.Style()
         style.configure("TLabelframe.Label", font=("", 11, "bold"))
 
@@ -99,10 +115,10 @@ class JamabandiGUI:
 
         row = 0
         for label, key, default, width in [
-            ("District Code:", "district_code", DEFAULTS["district_code"], 12),
-            ("Tehsil Code:", "tehsil_code", DEFAULTS["tehsil_code"], 12),
-            ("Village Code:", "village_code", DEFAULTS["village_code"], 12),
-            ("Period:", "period", DEFAULTS["period"], 16),
+            ("District Code:", "district_code", defaults["district_code"], 12),
+            ("Tehsil Code:", "tehsil_code", defaults["tehsil_code"], 12),
+            ("Village Code:", "village_code", defaults["village_code"], 12),
+            ("Period:", "period", defaults["period"], 16),
         ]:
             ttk.Label(main_frame, text=label).grid(
                 row=row, column=0, sticky=tk.W, padx=(0, 4), pady=2
@@ -118,7 +134,7 @@ class JamabandiGUI:
         ttk.Label(main_frame, text="Khewat Start:").grid(
             row=row, column=0, sticky=tk.W, padx=(0, 4), pady=2
         )
-        var_start = tk.IntVar(value=DEFAULTS["khewat_start"])
+        var_start = tk.IntVar(value=defaults["khewat_start"])
         self.vars["khewat_start"] = var_start
         ttk.Spinbox(
             main_frame, from_=1, to=99999, textvariable=var_start, width=10
@@ -126,7 +142,7 @@ class JamabandiGUI:
         ttk.Label(main_frame, text="Khewat End:").grid(
             row=row, column=2, sticky=tk.W, padx=(16, 4), pady=2
         )
-        var_end = tk.IntVar(value=DEFAULTS["khewat_end"])
+        var_end = tk.IntVar(value=defaults["khewat_end"])
         self.vars["khewat_end"] = var_end
         ttk.Spinbox(main_frame, from_=1, to=99999, textvariable=var_end, width=10).grid(
             row=row, column=3, sticky=tk.W, pady=2
@@ -137,7 +153,7 @@ class JamabandiGUI:
         ttk.Label(main_frame, text="Downloads Path:").grid(
             row=row, column=0, sticky=tk.W, padx=(0, 4), pady=2
         )
-        var_dl = tk.StringVar(value=DEFAULTS["downloads_dir"])
+        var_dl = tk.StringVar(value=defaults["downloads_dir"])
         self.vars["downloads_dir"] = var_dl
         ttk.Entry(main_frame, textvariable=var_dl, width=40).grid(
             row=row, column=1, columnspan=2, sticky=tk.EW, pady=2
@@ -154,7 +170,7 @@ class JamabandiGUI:
         ttk.Label(main_frame, text="Session Cookie:").grid(
             row=row, column=0, sticky=tk.W, padx=(0, 4), pady=2
         )
-        var_cookie = tk.StringVar(value=DEFAULTS["session_cookie"])
+        var_cookie = tk.StringVar(value=defaults["session_cookie"])
         self.vars["session_cookie"] = var_cookie
         ttk.Entry(main_frame, textvariable=var_cookie, width=60).grid(
             row=row, column=1, columnspan=3, sticky=tk.EW, pady=2
@@ -166,7 +182,7 @@ class JamabandiGUI:
         conc_sep.grid(row=row, column=0, columnspan=4, sticky=tk.EW, pady=(6, 4))
         row += 1
 
-        var_conc = tk.BooleanVar(value=DEFAULTS["concurrent_enabled"])
+        var_conc = tk.BooleanVar(value=defaults["concurrent_enabled"])
         self.vars["concurrent_enabled"] = var_conc
         self.conc_check = ttk.Checkbutton(
             main_frame,
@@ -179,7 +195,7 @@ class JamabandiGUI:
         ttk.Label(main_frame, text="Workers:").grid(
             row=row, column=2, sticky=tk.E, padx=(4, 4), pady=2
         )
-        var_cw = tk.IntVar(value=DEFAULTS["concurrent_workers"])
+        var_cw = tk.IntVar(value=defaults["concurrent_workers"])
         self.vars["concurrent_workers"] = var_cw
         self.conc_workers_spin = ttk.Spinbox(
             main_frame,
@@ -218,19 +234,19 @@ class JamabandiGUI:
         self.adv_widgets: list[ttk.Widget] = []
 
         adv_fields = [
-            ("Min Delay (s):", "min_delay", DEFAULTS["min_delay"], "double"),
-            ("Max Delay (s):", "max_delay", DEFAULTS["max_delay"], "double"),
-            ("Max Retries:", "max_retries", DEFAULTS["max_retries"], "int"),
+            ("Min Delay (s):", "min_delay", defaults["min_delay"], "double"),
+            ("Max Delay (s):", "max_delay", defaults["max_delay"], "double"),
+            ("Max Retries:", "max_retries", defaults["max_retries"], "int"),
             (
                 "Page Load Timeout (s):",
                 "page_load_timeout",
-                DEFAULTS["page_load_timeout"],
+                defaults["page_load_timeout"],
                 "int",
             ),
             (
                 "Form Postback Sleep (s):",
                 "form_postback_sleep",
-                DEFAULTS["form_postback_sleep"],
+                defaults["form_postback_sleep"],
                 "double",
             ),
         ]
@@ -262,7 +278,7 @@ class JamabandiGUI:
         self._pdf_frame = pdf_frame  # reference for collapsible advanced panel
 
         # Auto-convert toggle
-        var_auto = tk.BooleanVar(value=DEFAULTS["auto_convert_pdf"])
+        var_auto = tk.BooleanVar(value=defaults["auto_convert_pdf"])
         self.vars["auto_convert_pdf"] = var_auto
         ttk.Checkbutton(
             pdf_frame,
@@ -273,7 +289,7 @@ class JamabandiGUI:
         ttk.Label(pdf_frame, text="Input Dir:").grid(
             row=1, column=0, sticky=tk.W, padx=(0, 4), pady=2
         )
-        var_pi = tk.StringVar(value=DEFAULTS["pdf_input_dir"])
+        var_pi = tk.StringVar(value=defaults["pdf_input_dir"])
         self.vars["pdf_input_dir"] = var_pi
         ttk.Entry(pdf_frame, textvariable=var_pi, width=40).grid(
             row=1, column=1, sticky=tk.EW, pady=2
@@ -285,7 +301,7 @@ class JamabandiGUI:
         ttk.Label(pdf_frame, text="Output Dir:").grid(
             row=2, column=0, sticky=tk.W, padx=(0, 4), pady=2
         )
-        var_po = tk.StringVar(value=DEFAULTS["pdf_output_dir"])
+        var_po = tk.StringVar(value=defaults["pdf_output_dir"])
         self.vars["pdf_output_dir"] = var_po
         ttk.Entry(pdf_frame, textvariable=var_po, width=40).grid(
             row=2, column=1, sticky=tk.EW, pady=2
@@ -297,7 +313,7 @@ class JamabandiGUI:
         ttk.Label(pdf_frame, text="Workers:").grid(
             row=3, column=0, sticky=tk.W, padx=(0, 4), pady=2
         )
-        var_w = tk.IntVar(value=DEFAULTS["pdf_workers"])
+        var_w = tk.IntVar(value=defaults["pdf_workers"])
         self.vars["pdf_workers"] = var_w
         ttk.Spinbox(pdf_frame, from_=1, to=16, textvariable=var_w, width=6).grid(
             row=3, column=1, sticky=tk.W, pady=2

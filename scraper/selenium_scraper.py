@@ -39,6 +39,9 @@ from selenium.common.exceptions import (
 )
 from webdriver_manager.chrome import ChromeDriverManager
 
+from .config import get_config
+from .logger import get_logger, setup_logging, log_download, log_session_event
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -58,10 +61,17 @@ CONFIG = {
     "progress_file": "progress.json",
 }
 
-# URLs
-BASE_URL = "https://jamabandi.nic.in"
-LOGIN_URL = f"{BASE_URL}/PublicNakal/login.aspx"
-FORM_URL = f"{BASE_URL}/PublicNakal/CreateNewRequest"
+
+# URLs - now loaded from config
+def _get_urls():
+    """Get URLs from config with defaults."""
+    config = get_config()
+    base = config.urls.get("base_url", "https://jamabandi.nic.in")
+    return {
+        "base": base,
+        "login": f"{base}{config.urls.get('login_path', '/PublicNakal/login.aspx')}",
+        "form": f"{base}{config.urls.get('form_path', '/PublicNakal/CreateNewRequest')}",
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -154,6 +164,14 @@ class JamabandiScraper:
         self.downloads_dir = Path(config["downloads_dir"])
         self.downloads_dir.mkdir(exist_ok=True)
 
+        # Initialize logging
+        self.logger = setup_logging("jamabandi.selenium")
+        self._urls = _get_urls()
+        self._app_config = get_config()
+        log_session_event(
+            "INIT", f"Selenium scraper initialized, downloads_dir={self.downloads_dir}"
+        )
+
     def _create_driver(self) -> webdriver.Chrome:
         """Create Chrome driver with PDF printing capability and anti-detection."""
         chrome_options = Options()
@@ -200,7 +218,12 @@ class JamabandiScraper:
         # Install and create driver
         service = Service(ChromeDriverManager().install())
         driver = webdriver.Chrome(service=service, options=chrome_options)
-        driver.set_page_load_timeout(self.config["page_load_timeout"])
+
+        # Use config timeout if available, fall back to local config
+        timeout = self._app_config.http.get(
+            "timeout", self.config.get("page_load_timeout", 30)
+        )
+        driver.set_page_load_timeout(timeout)
 
         # Additional anti-detection: modify navigator.webdriver
         driver.execute_cdp_cmd(
@@ -218,16 +241,19 @@ class JamabandiScraper:
 
     def start(self):
         """Start the browser and initialize."""
-        print("Starting Chrome browser...")
+        self.logger.info("Starting Chrome browser...")
+        log_session_event("BROWSER_START", "Initializing Chrome driver")
         self.driver = self._create_driver()
-        print("Browser started successfully.")
+        self.logger.info("Browser started successfully.")
+        log_session_event("BROWSER_READY", "Chrome driver ready")
 
     def stop(self):
         """Close the browser."""
         if self.driver:
             self.driver.quit()
             self.driver = None
-            print("Browser closed.")
+            self.logger.info("Browser closed.")
+            log_session_event("BROWSER_STOP", "Chrome driver closed")
 
     def _dismiss_alert_if_present(self):
         """Dismiss any alert that might be present."""
@@ -252,8 +278,10 @@ class JamabandiScraper:
         Navigate to login page and wait for user to complete OTP authentication.
         Returns True if authentication successful.
         """
-        print(f"\nNavigating to login page: {LOGIN_URL}")
-        self.driver.get(LOGIN_URL)
+        login_url = self._urls["login"]
+        self.logger.info(f"Navigating to login page: {login_url}")
+        log_session_event("AUTH_START", f"Loading login page: {login_url}")
+        self.driver.get(login_url)
 
         print("\n" + "=" * 60)
         print("MANUAL ACTION REQUIRED")
@@ -279,15 +307,17 @@ class JamabandiScraper:
                 current_url = self._safe_get_current_url()
 
                 if "CreateNewRequest" in current_url:
-                    print("Authentication successful!")
+                    self.logger.info("Authentication successful!")
+                    log_session_event("AUTH_SUCCESS", "User authenticated via OTP")
                     return True
 
                 if "default.aspx" in current_url.lower():
-                    print("Logged in. Navigating to Nakal form...")
-                    self.driver.get(FORM_URL)
+                    self.logger.info("Logged in. Navigating to Nakal form...")
+                    self.driver.get(self._urls["form"])
                     time.sleep(2)
                     if "CreateNewRequest" in self._safe_get_current_url():
-                        print("Authentication successful!")
+                        self.logger.info("Authentication successful!")
+                        log_session_event("AUTH_SUCCESS", "User authenticated via OTP")
                         return True
 
                 time.sleep(1)  # Check every second
@@ -296,7 +326,10 @@ class JamabandiScraper:
                 # Ignore errors during polling, just continue
                 time.sleep(1)
 
-        print("Authentication timeout. Please try again.")
+        self.logger.warning("Authentication timeout. Please try again.")
+        log_session_event(
+            "AUTH_TIMEOUT", "User did not complete OTP authentication within timeout"
+        )
         return False
 
     def _wait_for_element(self, by: By, value: str, timeout: int = 10):
@@ -394,30 +427,33 @@ class JamabandiScraper:
         Set up the form with district, tehsil, village, period selections.
         This needs to be done once per session.
         """
-        print("\nSetting up form selections...")
+        self.logger.info("Setting up form selections...")
 
         try:
             # Make sure we're on the form page
             current_url = self._safe_get_current_url()
             if "CreateNewRequest" not in current_url:
                 if "login" in current_url.lower():
-                    print("  Not logged in!")
+                    self.logger.warning("Not logged in!")
                     return False
-                self.driver.get(FORM_URL)
+                self.driver.get(self._urls["form"])
                 time.sleep(3)
 
             # Check for login redirect
             if "login" in self._safe_get_current_url().lower():
-                print("  Session expired - redirected to login")
+                self.logger.warning("Session expired - redirected to login")
+                log_session_event(
+                    "SESSION_EXPIRED", "Redirected to login during form setup"
+                )
                 return False
 
             # Select "By Khewat" radio button
-            print("  Selecting search type: By Khewat")
+            self.logger.debug("Selecting search type: By Khewat")
             if not self._select_radio("RdobtnKhewat", wait_after=3):
                 return False
 
             # Select District - wait a bit longer for the first dropdown
-            print(f"  Selecting district: {self.config['district_code']}")
+            self.logger.debug(f"Selecting district: {self.config['district_code']}")
             time.sleep(1)
             if not self._select_dropdown(
                 "ddldname", self.config["district_code"], wait_after=3
@@ -425,31 +461,31 @@ class JamabandiScraper:
                 return False
 
             # Select Tehsil
-            print(f"  Selecting tehsil: {self.config['tehsil_code']}")
+            self.logger.debug(f"Selecting tehsil: {self.config['tehsil_code']}")
             if not self._select_dropdown(
                 "ddltname", self.config["tehsil_code"], wait_after=3
             ):
                 return False
 
             # Select Village
-            print(f"  Selecting village: {self.config['village_code']}")
+            self.logger.debug(f"Selecting village: {self.config['village_code']}")
             if not self._select_dropdown(
                 "ddlvname", self.config["village_code"], wait_after=3
             ):
                 return False
 
             # Select Period
-            print(f"  Selecting period: {self.config['period']}")
+            self.logger.debug(f"Selecting period: {self.config['period']}")
             if not self._select_dropdown(
                 "ddlPeriod", self.config["period"], wait_after=3
             ):
                 return False
 
-            print("Form setup complete!")
+            self.logger.info("Form setup complete!")
             return True
 
         except Exception as e:
-            print(f"Error setting up form: {e}")
+            self.logger.error(f"Error setting up form: {e}")
             return False
 
     def _check_session_valid(self) -> bool:
@@ -485,11 +521,11 @@ class JamabandiScraper:
             with open(filepath, "wb") as f:
                 f.write(pdf_bytes)
 
-            print(f"    Saved: {filename} ({len(pdf_bytes)} bytes)")
+            self.logger.info(f"Saved: {filename} ({len(pdf_bytes)} bytes)")
             return True
 
         except Exception as e:
-            print(f"    Error saving PDF: {e}")
+            self.logger.error(f"Error saving PDF: {e}")
             return False
 
     def download_nakal(self, khewat: int) -> bool:
@@ -497,18 +533,23 @@ class JamabandiScraper:
         Download Nakal for a specific khewat number.
         Returns True if successful.
         """
-        print(f"  Processing khewat {khewat}...")
+        self.logger.info(f"Processing khewat {khewat}...")
 
         try:
             # Check session
             if not self._check_session_valid():
-                print("    Session expired!")
+                self.logger.warning("Session expired!")
+                log_session_event(
+                    "SESSION_EXPIRED",
+                    f"Session invalid while processing khewat {khewat}",
+                )
                 return False
 
             # Select khewat from dropdown
             if not self._select_dropdown("ddlkhewat", str(khewat), wait_after=1):
-                print(f"    Khewat {khewat} not found in dropdown")
+                self.logger.warning(f"Khewat {khewat} not found in dropdown")
                 self.progress.mark_failed(khewat, "Not found in dropdown")
+                log_download(khewat, False, "Not found in dropdown")
                 return True  # Continue to next, this is not a session error
 
             # Remember original window
@@ -540,7 +581,7 @@ class JamabandiScraper:
                 # Switch to the new window
                 new_window = new_windows.pop()
                 self.driver.switch_to.window(new_window)
-                print(f"    Switched to new window for Nakal content")
+                self.logger.debug(f"Switched to new window for Nakal content")
                 time.sleep(2)  # Wait for content to load
 
             # Wait for actual content to load - look for specific elements
@@ -561,25 +602,30 @@ class JamabandiScraper:
             page_source = self.driver.page_source.lower()
 
             if "no record found" in page_source or "record not found" in page_source:
-                print(f"    No record found for khewat {khewat}")
+                self.logger.info(f"No record found for khewat {khewat}")
                 self.progress.mark_failed(khewat, "No record found")
+                log_download(khewat, False, "No record found")
                 # Close new window if opened, switch back to original
                 if new_windows:
                     self.driver.close()
                     self.driver.switch_to.window(original_window)
                 else:
-                    self.driver.get(FORM_URL)
+                    self.driver.get(self._urls["form"])
                     time.sleep(2)
                     self.setup_form()
                 return True  # Continue to next
 
             if "login" in self.driver.current_url.lower():
-                print("    Session expired during request!")
+                self.logger.warning("Session expired during request!")
+                log_session_event(
+                    "SESSION_EXPIRED", f"Redirected to login during khewat {khewat}"
+                )
                 return False
 
             # Save the page as PDF
             if self._save_page_as_pdf(khewat):
                 self.progress.mark_complete(khewat)
+                log_download(khewat, True, "PDF saved successfully")
                 # Close new window if opened, switch back to original
                 if new_windows:
                     self.driver.close()
@@ -587,32 +633,36 @@ class JamabandiScraper:
                     time.sleep(1)
                 else:
                     # Navigate back to form for next khewat
-                    self.driver.get(FORM_URL)
+                    self.driver.get(self._urls["form"])
                     time.sleep(2)
                     self.setup_form()
                 return True
             else:
                 self.progress.mark_failed(khewat, "Failed to save PDF")
+                log_download(khewat, False, "Failed to save PDF")
                 if new_windows:
                     self.driver.close()
                     self.driver.switch_to.window(original_window)
                 return True  # Continue to next
 
         except TimeoutException:
-            print(f"    Timeout processing khewat {khewat}")
+            self.logger.warning(f"Timeout processing khewat {khewat}")
             self.progress.mark_failed(khewat, "Timeout")
+            log_download(khewat, False, "Timeout")
             return True  # Continue to next
         except Exception as e:
-            print(f"    Error processing khewat {khewat}: {e}")
+            self.logger.error(f"Error processing khewat {khewat}: {e}")
             # Check if it's a session error
             if not self._check_session_valid():
                 return False
             self.progress.mark_failed(khewat, str(e))
+            log_download(khewat, False, str(e))
             return True  # Continue to next
 
     def run(self):
         """Main scraping loop."""
         self.progress.set_config(self.config)
+        log_session_event("RUN_START", f"Starting scraper run")
 
         while True:
             # Get pending khewat numbers
@@ -621,11 +671,11 @@ class JamabandiScraper:
             )
 
             if not pending:
-                print("\nAll khewat numbers have been processed!")
+                self.logger.info("All khewat numbers have been processed!")
                 break
 
-            print(f"\nPending: {len(pending)} khewat numbers")
-            print(f"Progress: {self.progress.get_summary()}")
+            self.logger.info(f"Pending: {len(pending)} khewat numbers")
+            self.logger.info(f"Progress: {self.progress.get_summary()}")
 
             # Start browser if not running
             if not self.driver:
@@ -633,13 +683,13 @@ class JamabandiScraper:
 
             # Authenticate
             if not self.authenticate():
-                print("Authentication failed. Retrying...")
+                self.logger.warning("Authentication failed. Retrying...")
                 continue
 
             # Setup form
             if not self.setup_form():
-                print("Form setup failed. Retrying...")
-                self.driver.get(FORM_URL)
+                self.logger.warning("Form setup failed. Retrying...")
+                self.driver.get(self._urls["form"])
                 time.sleep(2)
                 continue
 
@@ -649,14 +699,19 @@ class JamabandiScraper:
 
                 if not success:
                     # Session expired, need to re-authenticate
-                    print("\nSession expired. Re-authenticating...")
+                    self.logger.warning("Session expired. Re-authenticating...")
+                    log_session_event("SESSION_EXPIRED", "Re-authentication required")
                     break
 
-                # Rate limiting
-                delay = random.uniform(
-                    self.config["min_delay"], self.config["max_delay"]
+                # Rate limiting - use config delays if available
+                min_delay = self._app_config.delays.get(
+                    "min_delay", self.config.get("min_delay", 2)
                 )
-                print(f"    Waiting {delay:.1f}s before next request...")
+                max_delay = self._app_config.delays.get(
+                    "max_delay", self.config.get("max_delay", 5)
+                )
+                delay = random.uniform(min_delay, max_delay)
+                self.logger.debug(f"Waiting {delay:.1f}s before next request...")
                 time.sleep(delay)
 
             # Check if we completed all
@@ -667,15 +722,16 @@ class JamabandiScraper:
                 break
 
         # Final summary
-        print("\n" + "=" * 60)
-        print("SCRAPING COMPLETE")
-        print("=" * 60)
-        print(f"Final status: {self.progress.get_summary()}")
+        self.logger.info("=" * 60)
+        self.logger.info("SCRAPING COMPLETE")
+        self.logger.info("=" * 60)
+        self.logger.info(f"Final status: {self.progress.get_summary()}")
+        log_session_event("RUN_COMPLETE", self.progress.get_summary())
 
         if self.progress.data["failed"]:
-            print("\nFailed khewat numbers:")
+            self.logger.warning("Failed khewat numbers:")
             for k, error in self.progress.data["failed"].items():
-                print(f"  - Khewat {k}: {error}")
+                self.logger.warning(f"  - Khewat {k}: {error}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

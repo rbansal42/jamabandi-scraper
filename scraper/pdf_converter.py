@@ -27,6 +27,10 @@ from typing import List, Tuple, Dict, Any
 from weasyprint import HTML, CSS
 from weasyprint.text.fonts import FontConfiguration
 
+from .logger import get_logger
+
+logger = get_logger("pdf")
+
 
 # Custom CSS to override print-blocking styles and improve PDF output.
 # Landscape A4 gives ~277mm usable width for the 12-column Jamabandi table.
@@ -170,6 +174,7 @@ def convert_html_to_pdf(html_path: Path, pdf_path: Path) -> bool:
     Returns True if successful.
     """
     try:
+        logger.info(f"Converting {html_path.name} -> {pdf_path.name}")
         # Read HTML content
         with open(html_path, "r", encoding="utf-8") as f:
             html_content = f.read()
@@ -190,9 +195,11 @@ def convert_html_to_pdf(html_path: Path, pdf_path: Path) -> bool:
         # Generate PDF
         html_doc.write_pdf(pdf_path, stylesheets=[css], font_config=font_config)
 
+        logger.info(f"Converted {pdf_path.name} successfully")
         return True
 
     except Exception as e:
+        logger.error(f"Failed to convert {html_path.name}: {e}")
         print(f"    Error: {e}")
         return False
 
@@ -215,6 +222,8 @@ def process_batch(
         Dict with worker_id, success_count, fail_count, failed_files.
     """
     global _shared_counter, _total_files, _delete_html
+
+    logger.info(f"Worker {worker_id} starting batch of {len(file_pairs)} files")
 
     success_count = 0
     fail_count = 0
@@ -265,6 +274,10 @@ def process_batch(
                     f"  [Progress] {completed}/{total} files completed ({pct:.1f}%)",
                     flush=True,
                 )
+
+    logger.info(
+        f"Worker {worker_id} completed: {success_count} success, {fail_count} failed"
+    )
 
     return {
         "worker_id": worker_id,

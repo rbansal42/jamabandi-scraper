@@ -93,6 +93,36 @@ download records on your behalf.
 
 ---
 
+## Configuration
+
+The scraper can be configured via `config.yaml` in the project root. If the file doesn't exist, defaults are used.
+
+### Example config.yaml
+
+```yaml
+delays:
+  min_delay: 2.0    # Increase delay between requests
+  max_delay: 5.0
+
+http:
+  timeout: 60       # Longer timeout for slow connections
+
+logging:
+  level: DEBUG      # More verbose logging
+```
+
+### Available Settings
+
+- `urls.base_url` - Base URL for the website
+- `http.timeout` - Request timeout in seconds
+- `http.verify_ssl` - Whether to verify SSL certificates
+- `delays.min_delay`, `delays.max_delay` - Random delay range between requests
+- `retry.max_retries` - Number of retry attempts
+- `concurrency.max_workers` - Maximum concurrent workers
+- `logging.level` - Log level (DEBUG, INFO, WARNING, ERROR)
+
+---
+
 ## Project Structure
 
 ```

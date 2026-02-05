@@ -1,0 +1,35 @@
+# Jamabandi Scraper Configuration
+# Override any default values here
+
+urls:
+  base_url: "https://jamabandi.nic.in"
+  form_path: "/PublicNakal/CreateNewRequest"
+  login_path: "/PublicNakal/login.aspx"
+
+http:
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0"
+  timeout: 30
+  verify_ssl: false
+
+delays:
+  min_delay: 1.0
+  max_delay: 2.5
+  form_postback_sleep: 0.25
+
+retry:
+  max_retries: 3
+  retry_delay: 5.0
+
+concurrency:
+  max_workers: 8
+  default_workers: 3
+
+paths:
+  downloads_dir: "downloads"
+  logs_dir: "logs"
+  progress_file: "progress.json"
+
+logging:
+  level: "INFO"
+  max_file_size_mb: 10
+  backup_count: 5
