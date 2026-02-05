@@ -31,6 +31,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import requests
 from bs4 import BeautifulSoup
 
+from typing import Optional
+
 from .config import get_config
 from .logger import (
     get_logger,
@@ -41,6 +43,8 @@ from .logger import (
 )
 from .rate_limiter import RateLimiter
 from .retry_manager import RetryManager
+from .session_manager import SessionManager, SessionState, SessionExpiredError
+from .statistics import StatisticsTracker
 from .validator import PDFValidator, ValidationStatus
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -346,6 +350,12 @@ class JamabandiHTTPScraper:
         # Content validator
         self.validator = PDFValidator()
 
+        # Session manager for expiry detection
+        self.session_manager = SessionManager(cookie=session_cookie)
+
+        # Statistics tracker (initialized in run() when we know total count)
+        self.stats_tracker: Optional[StatisticsTracker] = None
+
     def _parse_asp_tokens(self, html: str) -> bool:
         """Extract ASP.NET hidden form tokens from HTML."""
         soup = BeautifulSoup(html, "html.parser")
@@ -402,6 +412,10 @@ class JamabandiHTTPScraper:
         elapsed_ms = response.elapsed.total_seconds() * 1000
         self.rate_limiter.record_response(response.status_code, elapsed_ms)
         log_http_request("POST", form_url, response.status_code, elapsed_ms)
+
+        # Check for session expiry using session manager
+        if self.session_manager.check_and_handle_response(response.url, response.text):
+            log_session_event("Session expired during postback")
 
         return response
 
@@ -540,9 +554,27 @@ class JamabandiHTTPScraper:
             self.logger.debug(f"Saved response to {debug_path}")
             return False
 
+    def update_session_cookie(self, new_cookie: str) -> None:
+        """Update session cookie after re-authentication.
+
+        Args:
+            new_cookie: New session cookie value
+        """
+        self.session_manager.update_cookie(new_cookie)
+        self.session.headers["Cookie"] = f"jamabandiID={new_cookie}"
+        self.form_initialized = False  # Force form re-initialization
+        self.logger.info("Session cookie updated, form will be re-initialized")
+
     def download_nakal(self, khewat: int) -> bool:
         """Download Nakal for a specific khewat number."""
         self.logger.info(f"Processing khewat {khewat}...")
+
+        # Wait for valid session (blocks if session is being refreshed)
+        try:
+            self.session_manager.wait_for_valid_session(timeout=300)
+        except SessionExpiredError:
+            self.logger.error("Session expired and not refreshed within timeout")
+            return False
 
         form_url = _get_form_url()
         headers = _get_headers()
@@ -586,10 +618,19 @@ class JamabandiHTTPScraper:
                     f"HTTP Error: {response.status_code} for khewat {khewat}"
                 )
                 self.progress.mark_failed(khewat, f"HTTP {response.status_code}")
+                if self.stats_tracker:
+                    self.stats_tracker.record_failure()
                 log_download(khewat, False, f"HTTP {response.status_code}")
                 return True  # Continue to next
 
-            # Check if session expired
+            # Check for session expiry using session manager
+            if self.session_manager.check_and_handle_response(
+                response.url, response.text
+            ):
+                log_session_event("Session expired during download")
+                return False  # Signal to stop and trigger re-auth
+
+            # Legacy check for session expiry (fallback)
             if (
                 "login.aspx" in response.url.lower()
                 or "login.aspx" in response.text.lower()
@@ -607,6 +648,8 @@ class JamabandiHTTPScraper:
                 self.progress.mark_failed(
                     khewat, f"Validation failed: {html_result.message}"
                 )
+                if self.stats_tracker:
+                    self.stats_tracker.record_failure()
                 log_download(khewat, False, f"Validation failed: {html_result.message}")
                 self._parse_asp_tokens(response.text)  # Update tokens
                 return True
@@ -622,6 +665,8 @@ class JamabandiHTTPScraper:
             ):
                 self.logger.warning(f"No record found for khewat {khewat}")
                 self.progress.mark_failed(khewat, "No record found")
+                if self.stats_tracker:
+                    self.stats_tracker.record_failure()
                 log_download(khewat, False, "No record found")
                 self._parse_asp_tokens(response.text)  # Update tokens
                 return True
@@ -635,6 +680,8 @@ class JamabandiHTTPScraper:
                     f"Error page returned for khewat {khewat} - will retry after form refresh"
                 )
                 self.progress.mark_failed(khewat, "Error page - needs retry")
+                if self.stats_tracker:
+                    self.stats_tracker.record_failure()
                 log_download(khewat, False, "Error page - needs retry")
                 # Need to re-setup the form
                 self.form_initialized = False
@@ -651,6 +698,10 @@ class JamabandiHTTPScraper:
                     f.write(response.content)
                 self.logger.info(f"Saved: {filename} ({len(response.content)} bytes)")
                 self.progress.mark_complete(khewat)
+                if self.stats_tracker:
+                    self.stats_tracker.record_success(
+                        bytes_downloaded=len(response.content)
+                    )
                 log_download(
                     khewat, True, f"{filename} ({len(response.content)} bytes)"
                 )
@@ -664,6 +715,10 @@ class JamabandiHTTPScraper:
                         f.write(response.text)
                     self.logger.info(f"Saved: {filename} ({len(response.text)} bytes)")
                     self.progress.mark_complete(khewat)
+                    if self.stats_tracker:
+                        self.stats_tracker.record_success(
+                            bytes_downloaded=len(response.text)
+                        )
                     log_download(
                         khewat, True, f"{filename} ({len(response.text)} bytes)"
                     )
@@ -675,6 +730,8 @@ class JamabandiHTTPScraper:
                     self.progress.mark_failed(
                         khewat, f"Small response: {len(response.text)} bytes"
                     )
+                    if self.stats_tracker:
+                        self.stats_tracker.record_failure()
                     log_download(
                         khewat, False, f"Small response: {len(response.text)} bytes"
                     )
@@ -686,16 +743,22 @@ class JamabandiHTTPScraper:
         except requests.RequestException as e:
             self.logger.error(f"Request error for khewat {khewat}: {e}")
             self.progress.mark_failed(khewat, str(e))
+            if self.stats_tracker:
+                self.stats_tracker.record_failure()
             log_download(khewat, False, str(e))
             return True
         except requests.Timeout:
             self.logger.error(f"Timeout for khewat {khewat}")
             self.progress.mark_failed(khewat, "Timeout")
+            if self.stats_tracker:
+                self.stats_tracker.record_failure()
             log_download(khewat, False, "Timeout")
             return True
         except Exception as e:
             self.logger.exception(f"Error downloading khewat {khewat}: {e}")
             self.progress.mark_failed(khewat, str(e))
+            if self.stats_tracker:
+                self.stats_tracker.record_failure()
             log_download(khewat, False, str(e))
             return True
 
@@ -739,6 +802,12 @@ class JamabandiHTTPScraper:
         self.progress.set_config(self.config)
         retry_manager = RetryManager()
 
+        # Set up session expiry callback (for GUI integration)
+        def on_session_expired():
+            self.logger.warning("Session expired - waiting for new cookie...")
+
+        self.session_manager.on_session_expired = on_session_expired
+
         # Initialize form
         if not self.initialize_form():
             self.logger.error("Failed to initialize. Please check your session cookie.")
@@ -753,6 +822,9 @@ class JamabandiHTTPScraper:
         pending = self.progress.get_pending(
             self.config["khewat_start"], self.config["khewat_end"]
         )
+
+        # Initialize statistics tracker
+        self.stats_tracker = StatisticsTracker(total_items=len(pending))
 
         self.logger.info(f"Processing {len(pending)} khewat numbers...")
         self.logger.info(f"Progress: {self.progress.get_summary()}")
@@ -788,11 +860,19 @@ class JamabandiHTTPScraper:
                 )
                 break
 
+            # Log stats every 10 downloads
+            if (i + 1) % 10 == 0 and self.stats_tracker:
+                self.logger.info(f"Stats: {self.stats_tracker.format_stats()}")
+
             # Rate limiting
             if i < len(pending) - 1:  # Don't wait after last one
                 delay = random.uniform(min_delay, max_delay)
                 self.logger.debug(f"Waiting {delay:.1f}s...")
                 time.sleep(delay)
+
+        # Log final stats
+        if self.stats_tracker:
+            self.logger.info(f"Final stats: {self.stats_tracker.format_stats()}")
 
         # Summary
         log_session_event("Scraping complete", self.progress.get_summary())
@@ -837,6 +917,7 @@ def _worker_run(
     session_cookie: str,
     config: dict,
     progress: ProgressTracker,
+    stats_tracker: Optional[StatisticsTracker] = None,
 ):
     """
     Worker function for concurrent downloads.
@@ -848,6 +929,10 @@ def _worker_run(
 
     # Create an independent scraper with its own session
     scraper = JamabandiHTTPScraper(session_cookie, config, progress)
+
+    # Use shared stats tracker if provided
+    if stats_tracker:
+        scraper.stats_tracker = stats_tracker
 
     # Get delays from config
     app_config = get_config()
@@ -903,6 +988,9 @@ def run_concurrent(session_cookie: str, config: dict, num_workers: int):
         logger.info("All khewat numbers already processed!")
         return
 
+    # Initialize shared statistics tracker (thread-safe)
+    stats_tracker = StatisticsTracker(total_items=len(pending))
+
     # Cap workers to number of pending items
     actual_workers = min(num_workers, len(pending))
 
@@ -938,7 +1026,13 @@ def run_concurrent(session_cookie: str, config: dict, num_workers: int):
             if not batch:
                 continue
             future = executor.submit(
-                _worker_run, worker_id, batch, session_cookie, config, progress
+                _worker_run,
+                worker_id,
+                batch,
+                session_cookie,
+                config,
+                progress,
+                stats_tracker,
             )
             futures[future] = worker_id
 
@@ -950,6 +1044,9 @@ def run_concurrent(session_cookie: str, config: dict, num_workers: int):
                 logger.exception(f"[W{wid}] Worker crashed: {e}")
 
     elapsed = time.time() - start_time
+
+    # Log final stats
+    logger.info(f"Final stats: {stats_tracker.format_stats()}")
 
     log_session_event("Concurrent scraping complete", f"elapsed={elapsed:.1f}s")
     logger.info("=" * 60)

@@ -71,6 +71,33 @@ class PasswordDialog(simpledialog.Dialog):
         self.result = self.password_var.get()
 
 
+class SessionRefreshDialog(simpledialog.Dialog):
+    """Dialog for entering new session cookie after expiry."""
+
+    def body(self, master):
+        ttk.Label(
+            master,
+            text="Session has expired!\nPlease login again in your browser and paste the new cookie:",
+            wraplength=400,
+            justify="center",
+        ).grid(row=0, column=0, columnspan=2, pady=(0, 12))
+
+        self.cookie_var = tk.StringVar()
+        self.entry = ttk.Entry(master, textvariable=self.cookie_var, width=60)
+        self.entry.grid(row=1, column=0, columnspan=2, pady=(0, 8))
+
+        ttk.Label(
+            master,
+            text="(Get cookie from browser DevTools > Application > Cookies > jamabandiID)",
+            font=("TkDefaultFont", 9, "italic"),
+        ).grid(row=2, column=0, columnspan=2)
+
+        return self.entry
+
+    def apply(self):
+        self.result = self.cookie_var.get().strip()
+
+
 class JamabandiGUI:
     def __init__(self, root: tk.Tk):
         self.root = root
@@ -87,6 +114,9 @@ class JamabandiGUI:
         self.advanced_unlocked = False
         self._scrape_total = 0
         self._scrape_done_count = 0
+        self._session_manager = None
+        self._stats_tracker = None
+        self._stats_update_job = None
 
         # StringVar / IntVar / DoubleVar holders
         self.vars: dict[str, tk.Variable] = {}
@@ -367,6 +397,27 @@ class JamabandiGUI:
             status_row, textvariable=self.progress_label_var, foreground="gray"
         ).pack(side=tk.RIGHT)
 
+        # ── Statistics Display ──────────────────────────────────────────
+        # NOTE: Statistics are designed for in-process scraping integration.
+        # Current subprocess-based scraping doesn't update these displays in real-time.
+        # TODO: Parse stats from subprocess output or implement IPC for live updates.
+        stats_frame = ttk.LabelFrame(container, text="Download Statistics", padding=8)
+        stats_frame.pack(fill=tk.X, pady=(0, 4))
+
+        self.stats_labels = {}
+        stats_grid = [
+            ("speed", "Speed:", "0.0/min"),
+            ("eta", "ETA:", "calculating..."),
+            ("success_rate", "Success Rate:", "0.0%"),
+            ("downloaded", "Downloaded:", "0 B"),
+        ]
+        for i, (key, label, default) in enumerate(stats_grid):
+            ttk.Label(stats_frame, text=label).grid(
+                row=i // 2, column=(i % 2) * 2, sticky="e", padx=(0, 4)
+            )
+            self.stats_labels[key] = ttk.Label(stats_frame, text=default, width=15)
+            self.stats_labels[key].grid(row=i // 2, column=(i % 2) * 2 + 1, sticky="w")
+
         # ── Log Output ─────────────────────────────────────────────────
         log_frame = ttk.LabelFrame(container, text="Log Output", padding=4)
         log_frame.pack(fill=tk.BOTH, expand=True)
@@ -423,6 +474,70 @@ class JamabandiGUI:
             self.stop_btn.configure(state=state_stop)
 
         self.root.after(0, _apply)
+
+    def _update_stats_display(self):
+        """Update statistics display from tracker."""
+        if not self._stats_tracker:
+            return
+
+        try:
+            stats = self._stats_tracker.get_stats()
+
+            self.stats_labels["speed"].config(
+                text=f"{stats.get('downloads_per_minute', 0):.1f}/min"
+            )
+
+            eta = stats.get("eta_seconds")
+            if eta and eta > 0:
+                mins, secs = divmod(int(eta), 60)
+                self.stats_labels["eta"].config(text=f"{mins}m {secs}s")
+            else:
+                self.stats_labels["eta"].config(text="calculating...")
+
+            self.stats_labels["success_rate"].config(
+                text=f"{stats.get('success_rate', 0):.1f}%"
+            )
+
+            bytes_dl = stats.get("bytes_downloaded", 0)
+            if bytes_dl >= 1024 * 1024:
+                self.stats_labels["downloaded"].config(
+                    text=f"{bytes_dl / (1024 * 1024):.1f} MB"
+                )
+            elif bytes_dl >= 1024:
+                self.stats_labels["downloaded"].config(text=f"{bytes_dl / 1024:.1f} KB")
+            else:
+                self.stats_labels["downloaded"].config(text=f"{bytes_dl} B")
+
+            # Schedule next update
+            if self.process is not None:
+                self._stats_update_job = self.root.after(
+                    1000, self._update_stats_display
+                )
+        except Exception as e:
+            self.logger.debug(f"Stats update error: {e}")
+
+    def _handle_session_expired(self):
+        """Handle session expiry by prompting for new cookie."""
+
+        def show_dialog():
+            dialog = SessionRefreshDialog(self.root, title="Session Expired")
+            if dialog.result:
+                self.vars["session_cookie"].set(dialog.result)
+                self._append_log("New cookie entered, resuming scrape...\n")
+                if self._session_manager:
+                    self._session_manager.update_cookie(dialog.result)
+            else:
+                self._append_log("No cookie entered - scrape may fail\n")
+
+        # Must run in main thread
+        self.root.after(0, show_dialog)
+
+    def _reset_stats_display(self):
+        """Reset statistics display to default values."""
+        self.stats_labels["speed"].config(text="0.0/min")
+        self.stats_labels["eta"].config(text="calculating...")
+        self.stats_labels["success_rate"].config(text="0.0%")
+        self.stats_labels["downloaded"].config(text="0 B")
 
     # ─────────────────────────────────────────────────────────────────────
     # CONCURRENT DOWNLOADS TOGGLE
@@ -683,6 +798,11 @@ class JamabandiGUI:
         self._set_running(False)
         self.process = None
 
+        # Cancel stats update job
+        if self._stats_update_job:
+            self.root.after_cancel(self._stats_update_job)
+            self._stats_update_job = None
+
         # Fire callback on the main thread (e.g. auto-convert after scraping)
         if on_complete:
             self.root.after(100, on_complete, code)
@@ -754,6 +874,11 @@ class JamabandiGUI:
             self._set_running(False)
             self.process = None
 
+            # Cancel stats update job
+            if self._stats_update_job:
+                self.root.after_cancel(self._stats_update_job)
+                self._stats_update_job = None
+
     # ─────────────────────────────────────────────────────────────────────
     # ACTIONS
     # ─────────────────────────────────────────────────────────────────────
@@ -783,6 +908,15 @@ class JamabandiGUI:
         # Track progress counts for the progress bar
         self._scrape_total = cfg["khewat_end"] - cfg["khewat_start"] + 1
         self._scrape_done_count = 0
+
+        # Reset stats display
+        self._reset_stats_display()
+
+        # NOTE: For in-process scraping, wire up callbacks here:
+        # self._session_manager = scraper.session_manager
+        # self._stats_tracker = scraper.stats_tracker
+        # scraper.session_manager.on_session_expired = self._handle_session_expired
+        # self._update_stats_display()
 
         cmd = [
             sys.executable,

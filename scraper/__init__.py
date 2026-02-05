@@ -10,6 +10,13 @@ from .logger import (
 )
 from .rate_limiter import RateLimiter
 from .retry_manager import RetryManager, FailureType, FailedItem
+from .statistics import StatisticsTracker
+from .session_manager import SessionManager, SessionState, SessionExpiredError
+from .cookie_capture import (
+    CookieCapture,
+    CookieCaptureMethod,
+    extract_cookie_from_header,
+)
 from .validator import (
     PDFValidator,
     ValidationStatus,
