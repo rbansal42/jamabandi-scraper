@@ -57,3 +57,7 @@ session:
 # Statistics tracking
 statistics:
   window_seconds: 60  # Sliding window for speed calculation
+
+# PDF conversion settings
+pdf:
+  backend: "auto"  # "auto", "weasyprint", or "wkhtmltopdf"

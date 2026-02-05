@@ -23,3 +23,10 @@ from .validator import (
     ValidationResult,
     validate_download,
 )
+from .pdf_backend import (
+    PDFBackend,
+    convert_html_to_pdf,
+    convert_file,
+    detect_available_backends,
+    get_default_backend,
+)
