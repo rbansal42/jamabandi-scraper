@@ -598,6 +598,23 @@ class JamabandiHTTPScraper:
                 log_session_event("Session expired")
                 return False  # Need re-auth
 
+            # Validate HTML content
+            html_result = self.validator.validate_html_content(response.text)
+            if html_result.status == ValidationStatus.INVALID:
+                self.logger.warning(
+                    f"Khewat {khewat}: Invalid HTML - {html_result.message}"
+                )
+                self.progress.mark_failed(
+                    khewat, f"Validation failed: {html_result.message}"
+                )
+                log_download(khewat, False, f"Validation failed: {html_result.message}")
+                self._parse_asp_tokens(response.text)  # Update tokens
+                return True
+            elif html_result.status == ValidationStatus.WARNING:
+                self.logger.warning(
+                    f"Khewat {khewat}: HTML warning - {html_result.message}"
+                )
+
             # Check for "no record" message
             if (
                 "no record" in response.text.lower()
@@ -885,6 +902,22 @@ def run_concurrent(session_cookie: str, config: dict, num_workers: int):
     logger.info("=" * 60)
     logger.info(f"Time elapsed: {elapsed:.1f}s")
     logger.info(f"Final status: {progress.get_summary()}")
+
+    # Record failures in retry manager
+    for k, error in progress.data["failed"].items():
+        retry_manager.record_failure(int(k), error)
+
+    # Retry failed downloads
+    if retry_manager.get_retryable():
+        print("\n" + "=" * 60)
+        print("RETRY PHASE")
+        print("=" * 60)
+
+        # Create a single scraper for retries
+        retry_scraper = JamabandiHTTPScraper(session_cookie, config, progress)
+        if retry_scraper.initialize_form() and retry_scraper.setup_form_selections():
+            results = retry_manager.retry_all(retry_scraper.download_nakal)
+            print(f"Retry results: {results}")
 
     if progress.data["failed"]:
         logger.warning("Failed khewat numbers:")
