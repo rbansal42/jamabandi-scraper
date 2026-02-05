@@ -2,181 +2,201 @@
 
 Download Jamabandi (land records) from **jamabandi.nic.in** as PDF files.
 
-This tool logs into the Jamabandi website using your session cookie, downloads all
-Nakal records for a village as HTML, and converts them to landscape PDF files
-automatically.
+## Download
+
+Get the latest release for your platform:
+
+| Platform | Download | 
+|----------|----------|
+| **Windows** | [JamabandiScraper.exe](https://github.com/rbansal42/jamabandi-scraper/releases/latest) |
+| **macOS** | [JamabandiScraper.dmg](https://github.com/rbansal42/jamabandi-scraper/releases/latest) |
+
+No Python installation required - just download and run!
 
 ---
 
-## Quick Start
+## Quick Start Guide
 
-### Step 1 - Install
+### Step 1: Get Your Session Cookie
 
-1. Make sure **Python 3.10+** is installed on your computer
-   - **Mac:** comes pre-installed, or run `brew install python`
-   - **Windows:** download from https://www.python.org/downloads/
+The Jamabandi website requires login with captcha. You need to copy your session cookie from the browser.
 
-2. Double-click the installer for your system:
-   - **Mac:** `Install Dependencies.command`
-   - **Windows:** `Install Dependencies.cmd`
+1. Open **Chrome** or **Edge** browser
+2. Go to **https://jamabandi.nic.in/PublicNakal**
+3. Complete the login/captcha process
+4. Press **F12** to open Developer Tools
+5. Click the **Application** tab (Chrome) or **Storage** tab (Firefox)
+6. In the left sidebar, expand **Cookies** and click on `https://jamabandi.nic.in`
+7. Find the cookie named **`jamabandiID`** (or `ASP.NET_SessionId`)
+8. Double-click the **Value** column and copy it (e.g., `abc123xyz...`)
 
-   This creates a virtual environment and installs all required packages.
+![Cookie Location](https://i.imgur.com/cookie-example.png)
 
-### Step 2 - Get Your Session Cookie
+### Step 2: Run the Application
 
-The Jamabandi website requires login. The scraper needs your session cookie to
-download records on your behalf.
+1. **Windows:** Double-click `JamabandiScraper.exe`
+2. **macOS:** Open `JamabandiScraper.dmg` and drag to Applications, then run
 
-1. Open **https://jamabandi.nic.in** in your browser and **log in**
-2. Open Developer Tools (press `F12` or `Cmd+Option+I` on Mac)
-3. Go to the **Application** tab (Chrome) or **Storage** tab (Firefox)
-4. Under **Cookies**, click on `https://jamabandi.nic.in`
-5. Find the cookie named `ASP.NET_SessionId` (or similar session cookie)
-6. Copy its **Value** (e.g. `c1l3rgujedy2qgc5gycc5ehx`)
+### Step 3: Configure and Start
 
-### Step 3 - Run
-
-1. Double-click the launcher:
-   - **Mac:** `Jamabandi Scraper.command`
-   - **Windows:** `Jamabandi Scraper.cmd`
-
-2. The GUI window will open. Fill in:
-   - **District Code** (e.g. `17` for Sirsa)
-   - **Tehsil Code** (e.g. `102`)
-   - **Village Code** (e.g. `05464`)
-   - **Period** (e.g. `2024-2025`)
-   - **Khewat Start / End** (range of khewat numbers to download)
-   - **Session Cookie** (paste the value from Step 2)
-
+1. Paste your **Session Cookie** in the cookie field
+2. Enter the location details:
+   - **District Code** (e.g., `17` for Sirsa)
+   - **Tehsil Code** (e.g., `102`)
+   - **Village Code** (e.g., `05464`)
+   - **Period** (e.g., `2024-2025`)
+   - **Khewat Range** (start and end numbers)
 3. Click **Start Scraping**
 
-4. The tool will:
-   - Download each khewat record as HTML
-   - Show real-time progress in the progress bar
-   - Automatically convert all HTML files to PDF when done
-   - Delete the HTML files after successful conversion
+The tool will download each record as HTML and automatically convert to PDF.
 
-5. Your PDF files will be in the `downloads_<village_code>/` folder.
+---
+
+## Features
+
+- **GUI Application** - Easy to use graphical interface
+- **Automatic PDF Conversion** - HTML records converted to landscape A4 PDFs
+- **Resume Support** - Interrupted downloads resume from where they left off
+- **Session Expiry Detection** - Prompts for new cookie when session expires
+- **Concurrent Downloads** - Optional parallel downloading (3-8 workers)
+- **Automatic Retry** - Failed downloads are retried automatically
+- **Adaptive Rate Limiting** - Adjusts speed based on server response
+- **Real-Time Statistics** - Download speed, ETA, success rate
+- **Update Checker** - Notifies when new version is available
 
 ---
 
 ## GUI Overview
 
-| Section | What it does |
+| Section | Description |
 |---------|-------------|
-| **Main Settings** | District, tehsil, village, period, khewat range, cookie |
-| **Downloads Path** | Where PDFs are saved. Leave blank to auto-create `downloads_<village>` |
-| **Concurrent Downloads** | Enable to use 3-8 parallel workers (faster but more load on server) |
-| **Advanced Settings** | Click `+` to expand, then `Unlock` (password: `admin123`) to adjust delays, retries, timeouts |
-| **PDF Conversion** | Input/output dirs and worker count for manual conversion |
-| **Start Scraping** | Begin downloading records |
-| **Convert HTML to PDF** | Manually convert HTML files if auto-convert was off |
-| **Stop** | Stop the running process |
-| **Progress Bar** | Shows download/conversion progress with counts |
+| **Main Settings** | District, tehsil, village, period, khewat range, session cookie |
+| **Downloads Path** | Where PDFs are saved (auto-creates `downloads_<village>` if blank) |
+| **Concurrent Downloads** | Enable for faster downloads with multiple workers |
+| **Advanced Settings** | Click `+` then `Unlock` (password: `admin123`) for delays, retries |
+| **Progress Bar** | Shows download progress with counts |
 | **Log Output** | Live output from the scraper |
+
+---
+
+## Troubleshooting
+
+### "Session Expired" Error
+
+Your session cookie has expired. This happens after ~30 minutes of inactivity.
+
+**Solution:**
+1. Go back to jamabandi.nic.in in your browser
+2. Refresh the page and complete captcha if needed
+3. Copy the new cookie value (it changes each session)
+4. Paste in the app and click Start again
+
+The app will resume from where it left off.
+
+### "No Record Found" for Some Khewats
+
+This is normal - not every khewat number has a record. The scraper will:
+- Log these as "no record" (not errors)
+- Continue to the next khewat
+- Not retry these (they're permanent, not transient failures)
+
+### PDF Conversion Fails
+
+The app includes WeasyPrint for PDF conversion. If you see conversion errors:
+
+**Windows:** Install wkhtmltopdf for better compatibility:
+1. Download from https://wkhtmltopdf.org/downloads.html
+2. Install to default location
+3. Restart the app
+
+**macOS:** Usually works out of the box. If issues persist, install via Homebrew:
+```bash
+brew install wkhtmltopdf
+```
+
+### App Won't Start (macOS)
+
+macOS may block unsigned apps. To allow:
+1. Right-click the app and select "Open"
+2. Click "Open" in the security dialog
+3. Or: System Preferences > Security & Privacy > "Open Anyway"
+
+### App Won't Start (Windows)
+
+Windows Defender may block the app. To allow:
+1. Click "More info" on the SmartScreen warning
+2. Click "Run anyway"
 
 ---
 
 ## Tips
 
-- **Session cookies expire.** If you get errors about expired sessions, log in
-  again on the website and paste the new cookie value.
-
-- **Resume support.** If the scraper is interrupted, just run it again with the
-  same settings. It automatically skips already-downloaded khewats using a
-  progress file stored in the downloads folder.
-
-- **Concurrent mode** is faster but uses more connections. Start with the default
-  (sequential) if you are unsure.
-
-- **PDFs are landscape A4** to fit the 12-column Jamabandi table without clipping.
+- **Cookie expires quickly** - Get a fresh cookie right before starting a large download
+- **Use concurrent mode** for faster downloads (enable checkbox, 3-8 workers)
+- **Check the log** for detailed progress and any errors
+- **Resume anytime** - Progress is saved, just restart with same settings
 
 ---
 
-## Reliability Features
+## Running from Source (Advanced)
 
-### Automatic Retry
-Failed downloads are automatically retried at the end of a scraping session. The retry manager:
-- Classifies failures as transient (worth retrying) or permanent (no record exists)
-- Uses exponential backoff between retry attempts
-- Respects configurable max retries (default: 3)
+If you prefer to run from source code instead of the standalone app:
 
-### Adaptive Rate Limiting
-The scraper automatically adjusts request delays based on server response:
-- Backs off on 429 (Too Many Requests) errors
-- Increases delay on server errors (5xx)
-- Decreases delay when server is responsive
+### Requirements
+- Python 3.10 or newer
+- tkinter (usually included with Python)
 
-### Progress Persistence
-Progress is saved atomically every few downloads to prevent data loss:
-- Uses temp file + rename for atomic writes
-- Configurable save interval
-- Tracks statistics (download count, time, etc.)
+### Installation
 
-### Download Validation
-Each download is validated before saving:
-- HTML checked for error patterns (no record, session expired, etc.)
-- PDF validated for correct header and minimum size
+```bash
+# Clone the repository
+git clone https://github.com/rbansal42/jamabandi-scraper.git
+cd jamabandi-scraper
 
-### Session Management
-The scraper automatically handles session expiry during long-running scrapes:
-- Monitors HTTP responses for login redirects and expiry messages
-- Pauses all workers when session expires
-- GUI prompts for new cookie without losing progress
-- Resumes from where it left off after re-authentication
+# Create virtual environment
+python -m venv venv
+source venv/bin/activate  # Mac/Linux
+venv\Scripts\activate     # Windows
 
-### Real-Time Statistics
-Track download progress with live statistics in the GUI:
-- Downloads per minute (speed)
-- Estimated time remaining (ETA)
-- Success rate percentage
-- Total bytes downloaded
+# Install dependencies
+pip install -r requirements.txt
 
-### Cookie Capture
-Two methods for obtaining the session cookie:
-- **Manual:** Copy from browser DevTools (always available)
-- **Webview:** Built-in browser window for automatic capture (requires pywebview)
+# Run the GUI
+python run.py
+```
+
+### Command Line Usage
+
+```bash
+# Run scraper directly
+python -m scraper.http_scraper --cookie YOUR_COOKIE --start 1 --end 100
+
+# Convert HTML to PDF manually
+python -m scraper.pdf_converter --input downloads_05464 --workers 4
+```
 
 ---
 
 ## Configuration
 
-The scraper can be configured via `config.yaml` in the project root. If the file doesn't exist, defaults are used.
-
-### Example config.yaml
+Create `config.yaml` in the app directory to customize settings:
 
 ```yaml
 delays:
-  min_delay: 2.0    # Increase delay between requests
-  max_delay: 5.0
+  min_delay: 2.0      # Minimum delay between requests (seconds)
+  max_delay: 5.0      # Maximum delay between requests
 
 http:
-  timeout: 60       # Longer timeout for slow connections
+  timeout: 60         # Request timeout (seconds)
+
+retry:
+  max_retries: 3      # Number of retry attempts
+
+concurrency:
+  max_workers: 5      # Maximum concurrent download workers
 
 logging:
-  level: DEBUG      # More verbose logging
-```
-
-### Available Settings
-
-- `urls.base_url` - Base URL for the website
-- `http.timeout` - Request timeout in seconds
-- `http.verify_ssl` - Whether to verify SSL certificates
-- `delays.min_delay`, `delays.max_delay` - Random delay range between requests
-- `retry.max_retries` - Number of retry attempts
-- `concurrency.max_workers` - Maximum concurrent workers
-- `logging.level` - Log level (DEBUG, INFO, WARNING, ERROR)
-
-### PDF Conversion Backend
-
-The scraper supports two PDF conversion backends:
-- **wkhtmltopdf** (default) - Easier to install, bundled in standalone builds
-- **WeasyPrint** - Better CSS support, requires GTK libraries
-
-Configure in `config.yaml`:
-```yaml
-pdf:
-  backend: "auto"  # or "weasyprint" / "wkhtmltopdf"
+  level: INFO         # Log level: DEBUG, INFO, WARNING, ERROR
 ```
 
 ---
@@ -185,62 +205,35 @@ pdf:
 
 ```
 jamabandi-scraper/
-├── run.py                          # Entry point (launches the GUI)
-├── requirements.txt                # Python dependencies
-├── Install Dependencies.command    # Mac installer (double-click)
-├── Install Dependencies.cmd        # Windows installer (double-click)
-├── Jamabandi Scraper.command       # Mac launcher (double-click)
-├── Jamabandi Scraper.cmd           # Windows launcher (double-click)
-└── scraper/
-    ├── gui.py                      # GUI application
-    ├── http_scraper.py             # HTTP-based scraper
-    ├── pdf_converter.py            # HTML to PDF converter
-    └── selenium_scraper.py         # Selenium-based scraper (legacy)
+├── run.py                    # Entry point
+├── requirements.txt          # Python dependencies
+├── config.yaml              # Configuration (optional)
+├── scraper/
+│   ├── gui.py               # GUI application
+│   ├── http_scraper.py      # HTTP-based scraper
+│   ├── pdf_converter.py     # HTML to PDF converter
+│   ├── pdf_backend.py       # PDF conversion backends
+│   ├── session_manager.py   # Session expiry handling
+│   ├── statistics.py        # Download statistics
+│   ├── rate_limiter.py      # Adaptive rate limiting
+│   ├── retry_manager.py     # Failed download retry
+│   ├── validator.py         # Download validation
+│   ├── update_checker.py    # Version update checker
+│   ├── cookie_capture.py    # Cookie capture helpers
+│   ├── config.py            # Configuration loader
+│   └── logger.py            # Logging setup
+└── tests/                   # Unit tests
 ```
 
 ---
 
-## Running from Terminal (Advanced)
+## License
 
-If you prefer the command line over the GUI:
-
-```bash
-# Activate the virtual environment
-source venv/bin/activate        # Mac/Linux
-venv\Scripts\activate           # Windows
-
-# Launch the GUI
-python run.py
-
-# Or run the scraper directly
-python scraper/http_scraper.py --cookie YOUR_COOKIE --start 1 --end 100
-
-# Convert HTML to PDF manually
-python scraper/pdf_converter.py --input downloads_05464 --workers 4 --delete-html
-```
+MIT License - See [LICENSE](LICENSE) for details.
 
 ---
 
-## Requirements
+## Support
 
-- Python 3.10 or newer
-- tkinter (usually included with Python; on Mac: `brew install python-tk`)
-- Internet connection to access jamabandi.nic.in
-- A valid login session on the Jamabandi website
-
-## Installation Options
-
-### Option 1: Standalone Installer (Recommended)
-
-Download the latest release for your platform:
-- **Windows:** `JamabandiScraper.exe` - Double-click to run
-- **macOS:** `JamabandiScraper.dmg` - Open and drag to Applications
-
-No Python installation required!
-
-### Option 2: Run from Source
-
-If you prefer to run from source code:
-1. Install Python 3.10+
-2. Clone the repository
-3. Run the installer script (see Quick Start)
+- **Issues:** [GitHub Issues](https://github.com/rbansal42/jamabandi-scraper/issues)
+- **Releases:** [GitHub Releases](https://github.com/rbansal42/jamabandi-scraper/releases)
