@@ -7,10 +7,15 @@ with support for nested access via dot notation.
 
 from __future__ import annotations
 
+import copy
+import threading
 from pathlib import Path
 from typing import Any, Optional
 
 import yaml
+
+# Thread lock for singleton initialization
+_config_lock = threading.Lock()
 
 
 DEFAULTS = {
@@ -55,13 +60,16 @@ def _deep_merge(base: dict, override: dict) -> dict:
     Deep merge override dict into base dict.
 
     Values in override take precedence. Nested dicts are merged recursively.
+    Returns a new dict without modifying the inputs.
     """
-    result = base.copy()
+    result = copy.deepcopy(base)
     for key, value in override.items():
         if key in result and isinstance(result[key], dict) and isinstance(value, dict):
             result[key] = _deep_merge(result[key], value)
         else:
-            result[key] = value
+            result[key] = (
+                copy.deepcopy(value) if isinstance(value, (dict, list)) else value
+            )
     return result
 
 
@@ -122,7 +130,10 @@ class Config:
 
     def __new__(cls, config_path: Optional[str] = None) -> Config:
         if cls._instance is None:
-            cls._instance = super().__new__(cls)
+            with _config_lock:
+                # Double-checked locking for thread safety
+                if cls._instance is None:
+                    cls._instance = super().__new__(cls)
         return cls._instance
 
     def __init__(self, config_path: Optional[str] = None) -> None:
@@ -151,7 +162,8 @@ class Config:
 
     def _load(self) -> None:
         """Load configuration from YAML file, merged over defaults."""
-        self._data = DEFAULTS.copy()
+        # Use deep copy to avoid modifying DEFAULTS
+        self._data = copy.deepcopy(DEFAULTS)
 
         if self._config_path and Path(self._config_path).exists():
             with open(self._config_path, "r", encoding="utf-8") as f:
