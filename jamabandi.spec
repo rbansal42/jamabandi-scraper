@@ -130,51 +130,78 @@ pyz = PYZ(
     cipher=None,
 )
 
-# Create the executable
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name='JamabandiScraper',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    console=False,  # GUI application, no console window
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    icon=icon_file,
-)
-
-# Collect all files
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name='JamabandiScraper',
-)
-
-# macOS: Create .app bundle
-if is_macos:
-    app = BUNDLE(
-        coll,
-        name='JamabandiScraper.app',
+# Platform-specific build configuration
+if is_windows:
+    # Windows: Single-file executable (onefile mode)
+    # This bundles everything into one .exe so users don't need the _internal folder
+    exe = EXE(
+        pyz,
+        a.scripts,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        [],
+        name='JamabandiScraper',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        console=False,  # GUI application, no console window
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
         icon=icon_file,
-        bundle_identifier='com.jamabandi.scraper',
-        info_plist={
-            'CFBundleName': 'JamabandiScraper',
-            'CFBundleDisplayName': 'Jamabandi Scraper',
-            'CFBundleVersion': '1.0.0',
-            'CFBundleShortVersionString': '1.0.0',
-            'NSHighResolutionCapable': True,
-            'NSRequiresAquaSystemAppearance': False,  # Support dark mode
-        },
     )
+else:
+    # macOS/Linux: Folder-based distribution (onedir mode)
+    # Required for .app bundle on macOS
+    exe = EXE(
+        pyz,
+        a.scripts,
+        [],
+        exclude_binaries=True,
+        name='JamabandiScraper',
+        debug=False,
+        bootloader_ignore_signals=False,
+        strip=False,
+        upx=True,
+        console=False,  # GUI application, no console window
+        disable_windowed_traceback=False,
+        argv_emulation=False,
+        target_arch=None,
+        codesign_identity=None,
+        entitlements_file=None,
+        icon=icon_file,
+    )
+
+    # Collect all files into folder
+    coll = COLLECT(
+        exe,
+        a.binaries,
+        a.zipfiles,
+        a.datas,
+        strip=False,
+        upx=True,
+        upx_exclude=[],
+        name='JamabandiScraper',
+    )
+
+    # macOS: Create .app bundle
+    if is_macos:
+        app = BUNDLE(
+            coll,
+            name='JamabandiScraper.app',
+            icon=icon_file,
+            bundle_identifier='com.jamabandi.scraper',
+            info_plist={
+                'CFBundleName': 'JamabandiScraper',
+                'CFBundleDisplayName': 'Jamabandi Scraper',
+                'CFBundleVersion': '1.0.0',
+                'CFBundleShortVersionString': '1.0.0',
+                'NSHighResolutionCapable': True,
+                'NSRequiresAquaSystemAppearance': False,  # Support dark mode
+            },
+        )
