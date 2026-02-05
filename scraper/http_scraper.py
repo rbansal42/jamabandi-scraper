@@ -683,6 +683,11 @@ class JamabandiHTTPScraper:
             self.form_initialized = False
             return True
 
+        except requests.RequestException as e:
+            self.logger.error(f"Request error for khewat {khewat}: {e}")
+            self.progress.mark_failed(khewat, str(e))
+            log_download(khewat, False, str(e))
+            return True
         except requests.Timeout:
             self.logger.error(f"Timeout for khewat {khewat}")
             self.progress.mark_failed(khewat, "Timeout")
@@ -693,6 +698,40 @@ class JamabandiHTTPScraper:
             self.progress.mark_failed(khewat, str(e))
             log_download(khewat, False, str(e))
             return True
+
+    def download_for_retry(self, khewat: int) -> bool:
+        """Download wrapper for RetryManager that returns actual success status.
+
+        Unlike download_nakal() which returns True to mean "continue processing",
+        this method returns True only if the download actually succeeded.
+
+        Args:
+            khewat: The khewat number to download
+
+        Returns:
+            True if download succeeded, False otherwise
+        """
+        # Re-initialize form if needed (may have been invalidated by previous download)
+        if not self.form_initialized:
+            if not self.initialize_form():
+                return False
+            if not self.setup_form_selections():
+                return False
+
+        # Track completed count before download
+        with self.progress._lock:
+            completed_before = set(self.progress.data["completed"])
+
+        # Attempt download
+        continue_ok = self.download_nakal(khewat)
+
+        if not continue_ok:
+            # Session expired
+            return False
+
+        # Check if khewat was added to completed list
+        with self.progress._lock:
+            return khewat in self.progress.data["completed"]
 
     def run(self):
         """Main scraping loop."""
@@ -774,7 +813,7 @@ class JamabandiHTTPScraper:
 
             # Re-initialize form for retries
             if self.initialize_form() and self.setup_form_selections():
-                results = retry_manager.retry_all(self.download_nakal)
+                results = retry_manager.retry_all(self.download_for_retry)
                 print(f"Retry results: {results}")
 
         if self.progress.data["failed"]:
@@ -932,7 +971,7 @@ def run_concurrent(session_cookie: str, config: dict, num_workers: int):
         # Create a single scraper for retries
         retry_scraper = JamabandiHTTPScraper(session_cookie, config, progress)
         if retry_scraper.initialize_form() and retry_scraper.setup_form_selections():
-            results = retry_manager.retry_all(retry_scraper.download_nakal)
+            results = retry_manager.retry_all(retry_scraper.download_for_retry)
             print(f"Retry results: {results}")
 
     if progress.data["failed"]:

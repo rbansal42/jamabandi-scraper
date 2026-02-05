@@ -40,7 +40,13 @@ class RateLimiter:
         self._backoff_until = 0.0
 
     def wait(self) -> None:
-        """Wait appropriate time before next request."""
+        """Wait appropriate time before next request.
+
+        Thread-safe: calculates wait time inside lock, sleeps outside lock
+        to avoid blocking other threads.
+        """
+        wait_time = 0.0
+
         with self._lock:
             now = time.time()
 
@@ -48,15 +54,19 @@ class RateLimiter:
             if now < self._backoff_until:
                 wait_time = self._backoff_until - now
                 logger.debug(f"Backoff wait: {wait_time:.1f}s")
-                time.sleep(wait_time)
-                return
+            else:
+                # Normal rate limiting
+                elapsed = now - self._last_request_time
+                if elapsed < self.current_delay:
+                    wait_time = self.current_delay - elapsed
 
-            # Normal rate limiting
-            elapsed = now - self._last_request_time
-            if elapsed < self.current_delay:
-                time.sleep(self.current_delay - elapsed)
+            # Update last request time before releasing lock
+            # (anticipating we will make the request after sleeping)
+            self._last_request_time = now + wait_time
 
-            self._last_request_time = time.time()
+        # Sleep OUTSIDE the lock so other threads aren't blocked
+        if wait_time > 0:
+            time.sleep(wait_time)
 
     def record_response(self, status_code: int, response_time_ms: float) -> None:
         """Record response and adjust rate limiting."""

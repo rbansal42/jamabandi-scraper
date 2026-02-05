@@ -154,6 +154,23 @@ class TestRecordingFailures:
         assert self.manager._failures[0].retry_count == 1
         assert self.manager._failures[0].error == "Another timeout"
 
+    def test_record_failure_updates_failure_type_on_rerecord(self):
+        """Re-recording a failure should update its failure_type."""
+        # First record as transient (timeout)
+        self.manager.record_failure(123, "Timeout error")
+        assert self.manager._failures[0].failure_type == FailureType.TRANSIENT
+
+        # Re-record with permanent error - type should change
+        self.manager.record_failure(123, "No record found")
+        assert len(self.manager._failures) == 1
+        assert self.manager._failures[0].failure_type == FailureType.PERMANENT
+        assert self.manager._failures[0].retry_count == 1
+
+        # Re-record with transient again - type should change back
+        self.manager.record_failure(123, "Connection error")
+        assert self.manager._failures[0].failure_type == FailureType.TRANSIENT
+        assert self.manager._failures[0].retry_count == 2
+
     def test_record_multiple_different_failures(self):
         """Can record failures for multiple different khewats."""
         self.manager.record_failure(100, "Error 1")

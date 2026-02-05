@@ -55,6 +55,7 @@ class RetryManager:
             if item.khewat == khewat:
                 item.retry_count += 1
                 item.error = error
+                item.failure_type = failure_type  # Update type on re-record
                 return
 
         self._failures.append(
