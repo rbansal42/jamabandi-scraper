@@ -12,13 +12,19 @@ http:
   verify_ssl: false
 
 delays:
-  min_delay: 1.0
-  max_delay: 2.5
+  min_delay: 1.0       # Minimum delay between requests (seconds)
+  max_delay: 2.5       # Maximum delay between requests (seconds)
   form_postback_sleep: 0.25
 
+# Retry settings for failed downloads
+# Failed items are collected and retried at the end of the session
 retry:
-  max_retries: 3
-  retry_delay: 5.0
+  max_retries: 3       # Maximum retry attempts per failed item
+  retry_delay: 5.0     # Base delay between retries (uses exponential backoff)
+
+# Rate limiting automatically adapts to server response:
+# - Backs off on 429 (Too Many Requests) or 5xx errors
+# - Gradually decreases delay when server is responsive
 
 concurrency:
   max_workers: 8

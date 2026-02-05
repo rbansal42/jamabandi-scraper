@@ -39,6 +39,9 @@ from .logger import (
     log_download,
     log_session_event,
 )
+from .rate_limiter import RateLimiter
+from .retry_manager import RetryManager
+from .validator import PDFValidator, ValidationStatus
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -122,23 +125,75 @@ def _get_headers() -> dict:
 
 
 class ProgressTracker:
-    """Thread-safe tracker for downloaded khewat numbers with resume capability."""
+    """Thread-safe tracker for downloaded khewat numbers with resume capability.
 
-    def __init__(self, filepath: str):
+    Features:
+    - Atomic saves using temp file + rename to prevent corruption
+    - Configurable save interval to reduce I/O overhead
+    - Metadata tracking (start_time, stats)
+    - Thread-safe operations with locking
+    """
+
+    def __init__(self, filepath: str, save_interval: int = 5):
+        """Initialize the progress tracker.
+
+        Args:
+            filepath: Path to the progress JSON file
+            save_interval: Number of downloads between automatic saves (default 5)
+        """
         self.filepath = Path(filepath)
+        self.save_interval = save_interval
+        self._unsaved_count = 0
+        self._lock = threading.Lock()
+
         # Resolve relative paths against the script's directory so that
         # "progress.json" doesn't land in an arbitrary CWD.
         if not self.filepath.is_absolute():
             self.filepath = Path(__file__).parent / self.filepath
-        self.data = {"config": {}, "completed": [], "failed": {}, "last_updated": None}
-        self._lock = threading.Lock()
+
+        self.data = {
+            "config": {},
+            "completed": [],
+            "failed": {},
+            "last_updated": None,
+            "stats": {
+                "start_time": None,
+                "total_time": 0,
+                "download_count": 0,
+                "bytes_downloaded": 0,
+            },
+        }
         self.load()
 
     def load(self):
+        """Load progress from file if it exists."""
         if self.filepath.exists():
             try:
                 with open(self.filepath, "r", encoding="utf-8") as f:
-                    self.data = json.load(f)
+                    loaded_data = json.load(f)
+                # Merge with defaults to handle missing keys from older versions
+                for key in self.data:
+                    if key in loaded_data:
+                        self.data[key] = loaded_data[key]
+                # Ensure stats dict has all required keys
+                if "stats" not in self.data or not isinstance(self.data["stats"], dict):
+                    self.data["stats"] = {
+                        "start_time": None,
+                        "total_time": 0,
+                        "download_count": 0,
+                        "bytes_downloaded": 0,
+                    }
+                else:
+                    # Fill in missing stats keys
+                    defaults = {
+                        "start_time": None,
+                        "total_time": 0,
+                        "download_count": 0,
+                        "bytes_downloaded": 0,
+                    }
+                    for k, v in defaults.items():
+                        if k not in self.data["stats"]:
+                            self.data["stats"][k] = v
                 print(
                     f"Loaded progress: {len(self.data['completed'])} completed, "
                     f"{len(self.data['failed'])} failed"
@@ -146,13 +201,28 @@ class ProgressTracker:
             except (json.JSONDecodeError, IOError) as e:
                 print(f"Warning: Could not load progress file: {e}")
 
-    def save(self):
+    def _atomic_save(self) -> None:
+        """Save atomically: write temp file, then rename.
+
+        This prevents data corruption if the process is interrupted during save.
+        """
         self.data["last_updated"] = datetime.now().isoformat()
         self.filepath.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.filepath, "w", encoding="utf-8") as f:
+
+        temp_path = self.filepath.with_suffix(".json.tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=2)
+        temp_path.replace(self.filepath)  # Atomic rename on POSIX systems
+
+    def flush(self) -> None:
+        """Force save pending changes."""
+        with self._lock:
+            if self._unsaved_count > 0:
+                self._atomic_save()
+                self._unsaved_count = 0
 
     def set_config(self, config: dict):
+        """Set the scraping configuration and initialize stats."""
         with self._lock:
             self.data["config"] = {
                 "district": config["district_code"],
@@ -160,27 +230,53 @@ class ProgressTracker:
                 "village": config["village_code"],
                 "period": config["period"],
             }
-            self.save()
+            # Record start time if not already set
+            if self.data["stats"]["start_time"] is None:
+                self.data["stats"]["start_time"] = datetime.now().isoformat()
+            self._atomic_save()
+            self._unsaved_count = 0
 
-    def mark_complete(self, khewat: int):
+    def mark_complete(self, khewat: int, bytes_downloaded: int = 0):
+        """Mark a khewat as successfully downloaded.
+
+        Args:
+            khewat: The khewat number that was downloaded
+            bytes_downloaded: Number of bytes in the downloaded file
+        """
         with self._lock:
             if khewat not in self.data["completed"]:
                 self.data["completed"].append(khewat)
                 self.data["completed"].sort()
+                self.data["stats"]["download_count"] += 1
+                self.data["stats"]["bytes_downloaded"] += bytes_downloaded
             self.data["failed"].pop(str(khewat), None)
-            self.save()
+            self._unsaved_count += 1
+            if self._unsaved_count >= self.save_interval:
+                self._atomic_save()
+                self._unsaved_count = 0
 
     def mark_failed(self, khewat: int, error: str):
+        """Mark a khewat as failed with an error message.
+
+        Args:
+            khewat: The khewat number that failed
+            error: Description of the error
+        """
         with self._lock:
             self.data["failed"][str(khewat)] = error
-            self.save()
+            self._unsaved_count += 1
+            if self._unsaved_count >= self.save_interval:
+                self._atomic_save()
+                self._unsaved_count = 0
 
     def get_pending(self, start: int, end: int) -> list:
+        """Get list of khewat numbers that haven't been downloaded yet."""
         with self._lock:
             completed_set = set(self.data["completed"])
             return [k for k in range(start, end + 1) if k not in completed_set]
 
     def get_summary(self) -> str:
+        """Get a human-readable summary of progress."""
         with self._lock:
             total = CONFIG["khewat_end"] - CONFIG["khewat_start"] + 1
             return (
@@ -188,6 +284,11 @@ class ProgressTracker:
                 f"Failed: {len(self.data['failed'])}, "
                 f"Pending: {total - len(self.data['completed'])}"
             )
+
+    def get_stats(self) -> dict:
+        """Get download statistics."""
+        with self._lock:
+            return self.data["stats"].copy()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -239,6 +340,12 @@ class JamabandiHTTPScraper:
         self.event_validation = None
         self.form_initialized = False
 
+        # Adaptive rate limiter
+        self.rate_limiter = RateLimiter()
+
+        # Content validator
+        self.validator = PDFValidator()
+
     def _parse_asp_tokens(self, html: str) -> bool:
         """Extract ASP.NET hidden form tokens from HTML."""
         soup = BeautifulSoup(html, "html.parser")
@@ -284,7 +391,7 @@ class JamabandiHTTPScraper:
         if extra_data:
             data.update(extra_data)
 
-        start_time = time.time()
+        self.rate_limiter.wait()
         response = self.session.post(
             form_url,
             data=data,
@@ -292,7 +399,8 @@ class JamabandiHTTPScraper:
             allow_redirects=True,
             timeout=timeout,
         )
-        elapsed_ms = (time.time() - start_time) * 1000
+        elapsed_ms = response.elapsed.total_seconds() * 1000
+        self.rate_limiter.record_response(response.status_code, elapsed_ms)
         log_http_request("POST", form_url, response.status_code, elapsed_ms)
 
         return response
@@ -305,9 +413,10 @@ class JamabandiHTTPScraper:
 
         self.logger.info("Loading form page...")
 
-        start_time = time.time()
+        self.rate_limiter.wait()
         response = self.session.get(form_url, headers=headers, timeout=timeout)
-        elapsed_ms = (time.time() - start_time) * 1000
+        elapsed_ms = response.elapsed.total_seconds() * 1000
+        self.rate_limiter.record_response(response.status_code, elapsed_ms)
         log_http_request("GET", form_url, response.status_code, elapsed_ms)
 
         if response.status_code != 200:
@@ -459,7 +568,7 @@ class JamabandiHTTPScraper:
             form_data["__EVENTVALIDATION"] = self.event_validation
 
         try:
-            start_time = time.time()
+            self.rate_limiter.wait()
             response = self.session.post(
                 form_url,
                 data=form_data,
@@ -467,7 +576,8 @@ class JamabandiHTTPScraper:
                 allow_redirects=True,
                 timeout=timeout,
             )
-            elapsed_ms = (time.time() - start_time) * 1000
+            elapsed_ms = response.elapsed.total_seconds() * 1000
+            self.rate_limiter.record_response(response.status_code, elapsed_ms)
             log_http_request("POST", form_url, response.status_code, elapsed_ms)
 
             # Check response
@@ -487,6 +597,23 @@ class JamabandiHTTPScraper:
                 self.logger.error("Session expired!")
                 log_session_event("Session expired")
                 return False  # Need re-auth
+
+            # Validate HTML content
+            html_result = self.validator.validate_html_content(response.text)
+            if html_result.status == ValidationStatus.INVALID:
+                self.logger.warning(
+                    f"Khewat {khewat}: Invalid HTML - {html_result.message}"
+                )
+                self.progress.mark_failed(
+                    khewat, f"Validation failed: {html_result.message}"
+                )
+                log_download(khewat, False, f"Validation failed: {html_result.message}")
+                self._parse_asp_tokens(response.text)  # Update tokens
+                return True
+            elif html_result.status == ValidationStatus.WARNING:
+                self.logger.warning(
+                    f"Khewat {khewat}: HTML warning - {html_result.message}"
+                )
 
             # Check for "no record" message
             if (
@@ -556,6 +683,11 @@ class JamabandiHTTPScraper:
             self.form_initialized = False
             return True
 
+        except requests.RequestException as e:
+            self.logger.error(f"Request error for khewat {khewat}: {e}")
+            self.progress.mark_failed(khewat, str(e))
+            log_download(khewat, False, str(e))
+            return True
         except requests.Timeout:
             self.logger.error(f"Timeout for khewat {khewat}")
             self.progress.mark_failed(khewat, "Timeout")
@@ -567,10 +699,45 @@ class JamabandiHTTPScraper:
             log_download(khewat, False, str(e))
             return True
 
+    def download_for_retry(self, khewat: int) -> bool:
+        """Download wrapper for RetryManager that returns actual success status.
+
+        Unlike download_nakal() which returns True to mean "continue processing",
+        this method returns True only if the download actually succeeded.
+
+        Args:
+            khewat: The khewat number to download
+
+        Returns:
+            True if download succeeded, False otherwise
+        """
+        # Re-initialize form if needed (may have been invalidated by previous download)
+        if not self.form_initialized:
+            if not self.initialize_form():
+                return False
+            if not self.setup_form_selections():
+                return False
+
+        # Track completed count before download
+        with self.progress._lock:
+            completed_before = set(self.progress.data["completed"])
+
+        # Attempt download
+        continue_ok = self.download_nakal(khewat)
+
+        if not continue_ok:
+            # Session expired
+            return False
+
+        # Check if khewat was added to completed list
+        with self.progress._lock:
+            return khewat in self.progress.data["completed"]
+
     def run(self):
         """Main scraping loop."""
         log_session_event("Scraping started")
         self.progress.set_config(self.config)
+        retry_manager = RetryManager()
 
         # Initialize form
         if not self.initialize_form():
@@ -633,6 +800,21 @@ class JamabandiHTTPScraper:
         self.logger.info("SCRAPING COMPLETE")
         self.logger.info("=" * 60)
         self.logger.info(f"Final status: {self.progress.get_summary()}")
+
+        # Record failures in retry manager
+        for k, error in self.progress.data["failed"].items():
+            retry_manager.record_failure(int(k), error)
+
+        # Retry failed downloads
+        if retry_manager.get_retryable():
+            print("\n" + "=" * 60)
+            print("RETRY PHASE")
+            print("=" * 60)
+
+            # Re-initialize form for retries
+            if self.initialize_form() and self.setup_form_selections():
+                results = retry_manager.retry_all(self.download_for_retry)
+                print(f"Retry results: {results}")
 
         if self.progress.data["failed"]:
             self.logger.warning("Failed khewat numbers:")
@@ -714,6 +896,7 @@ def run_concurrent(session_cookie: str, config: dict, num_workers: int):
 
     progress = ProgressTracker(config["progress_file"])
     progress.set_config(config)
+    retry_manager = RetryManager()
 
     pending = progress.get_pending(config["khewat_start"], config["khewat_end"])
     if not pending:
@@ -774,6 +957,22 @@ def run_concurrent(session_cookie: str, config: dict, num_workers: int):
     logger.info("=" * 60)
     logger.info(f"Time elapsed: {elapsed:.1f}s")
     logger.info(f"Final status: {progress.get_summary()}")
+
+    # Record failures in retry manager
+    for k, error in progress.data["failed"].items():
+        retry_manager.record_failure(int(k), error)
+
+    # Retry failed downloads
+    if retry_manager.get_retryable():
+        print("\n" + "=" * 60)
+        print("RETRY PHASE")
+        print("=" * 60)
+
+        # Create a single scraper for retries
+        retry_scraper = JamabandiHTTPScraper(session_cookie, config, progress)
+        if retry_scraper.initialize_form() and retry_scraper.setup_form_selections():
+            results = retry_manager.retry_all(retry_scraper.download_for_retry)
+            print(f"Retry results: {results}")
 
     if progress.data["failed"]:
         logger.warning("Failed khewat numbers:")
