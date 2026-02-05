@@ -39,3 +39,21 @@ logging:
   level: "INFO"
   max_file_size_mb: 10
   backup_count: 5
+
+# Session management settings
+session:
+  refresh_timeout: 300  # Seconds to wait for new cookie when session expires
+  # URL patterns that indicate session expiry
+  expiry_url_patterns:
+    - "login.aspx"
+    - "login.asp"
+  # Content patterns that indicate session expiry
+  expiry_content_patterns:
+    - "enter mobile"
+    - "session expired"
+    - "session has timed out"
+    - "please login"
+
+# Statistics tracking
+statistics:
+  window_seconds: 60  # Sliding window for speed calculation
