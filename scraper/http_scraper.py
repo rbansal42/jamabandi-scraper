@@ -698,6 +698,7 @@ class JamabandiHTTPScraper:
         """Main scraping loop."""
         log_session_event("Scraping started")
         self.progress.set_config(self.config)
+        retry_manager = RetryManager()
 
         # Initialize form
         if not self.initialize_form():
@@ -760,6 +761,21 @@ class JamabandiHTTPScraper:
         self.logger.info("SCRAPING COMPLETE")
         self.logger.info("=" * 60)
         self.logger.info(f"Final status: {self.progress.get_summary()}")
+
+        # Record failures in retry manager
+        for k, error in self.progress.data["failed"].items():
+            retry_manager.record_failure(int(k), error)
+
+        # Retry failed downloads
+        if retry_manager.get_retryable():
+            print("\n" + "=" * 60)
+            print("RETRY PHASE")
+            print("=" * 60)
+
+            # Re-initialize form for retries
+            if self.initialize_form() and self.setup_form_selections():
+                results = retry_manager.retry_all(self.download_nakal)
+                print(f"Retry results: {results}")
 
         if self.progress.data["failed"]:
             self.logger.warning("Failed khewat numbers:")
