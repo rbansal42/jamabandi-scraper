@@ -18,7 +18,7 @@ from .logger import get_logger
 logger = get_logger("update_checker")
 
 # Current application version
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 # GitHub repository info
 GITHUB_OWNER = "rbansal42"
