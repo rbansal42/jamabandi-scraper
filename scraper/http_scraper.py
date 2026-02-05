@@ -39,6 +39,9 @@ from .logger import (
     log_download,
     log_session_event,
 )
+from .rate_limiter import RateLimiter
+from .retry_manager import RetryManager
+from .validator import PDFValidator, ValidationStatus
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
@@ -337,6 +340,12 @@ class JamabandiHTTPScraper:
         self.event_validation = None
         self.form_initialized = False
 
+        # Adaptive rate limiter
+        self.rate_limiter = RateLimiter()
+
+        # Content validator
+        self.validator = PDFValidator()
+
     def _parse_asp_tokens(self, html: str) -> bool:
         """Extract ASP.NET hidden form tokens from HTML."""
         soup = BeautifulSoup(html, "html.parser")
@@ -382,7 +391,7 @@ class JamabandiHTTPScraper:
         if extra_data:
             data.update(extra_data)
 
-        start_time = time.time()
+        self.rate_limiter.wait()
         response = self.session.post(
             form_url,
             data=data,
@@ -390,7 +399,8 @@ class JamabandiHTTPScraper:
             allow_redirects=True,
             timeout=timeout,
         )
-        elapsed_ms = (time.time() - start_time) * 1000
+        elapsed_ms = response.elapsed.total_seconds() * 1000
+        self.rate_limiter.record_response(response.status_code, elapsed_ms)
         log_http_request("POST", form_url, response.status_code, elapsed_ms)
 
         return response
@@ -403,9 +413,10 @@ class JamabandiHTTPScraper:
 
         self.logger.info("Loading form page...")
 
-        start_time = time.time()
+        self.rate_limiter.wait()
         response = self.session.get(form_url, headers=headers, timeout=timeout)
-        elapsed_ms = (time.time() - start_time) * 1000
+        elapsed_ms = response.elapsed.total_seconds() * 1000
+        self.rate_limiter.record_response(response.status_code, elapsed_ms)
         log_http_request("GET", form_url, response.status_code, elapsed_ms)
 
         if response.status_code != 200:
@@ -557,7 +568,7 @@ class JamabandiHTTPScraper:
             form_data["__EVENTVALIDATION"] = self.event_validation
 
         try:
-            start_time = time.time()
+            self.rate_limiter.wait()
             response = self.session.post(
                 form_url,
                 data=form_data,
@@ -565,7 +576,8 @@ class JamabandiHTTPScraper:
                 allow_redirects=True,
                 timeout=timeout,
             )
-            elapsed_ms = (time.time() - start_time) * 1000
+            elapsed_ms = response.elapsed.total_seconds() * 1000
+            self.rate_limiter.record_response(response.status_code, elapsed_ms)
             log_http_request("POST", form_url, response.status_code, elapsed_ms)
 
             # Check response
@@ -812,6 +824,7 @@ def run_concurrent(session_cookie: str, config: dict, num_workers: int):
 
     progress = ProgressTracker(config["progress_file"])
     progress.set_config(config)
+    retry_manager = RetryManager()
 
     pending = progress.get_pending(config["khewat_start"], config["khewat_end"])
     if not pending:
