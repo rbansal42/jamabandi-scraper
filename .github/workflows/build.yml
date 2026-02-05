@@ -52,7 +52,11 @@ jobs:
           pip install pyinstaller pdfkit
       
       - name: Install wkhtmltopdf
-        run: brew install --cask wkhtmltopdf
+        run: |
+          # Download wkhtmltopdf directly (cask was deprecated)
+          curl -L -o wkhtmltopdf.pkg https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox-0.12.6.1-3.macos-cocoa.pkg
+          sudo installer -pkg wkhtmltopdf.pkg -target /
+        continue-on-error: true  # WeasyPrint is fallback if this fails
       
       - name: Build app bundle
         run: python -m PyInstaller jamabandi.spec --clean
