@@ -8,3 +8,11 @@ from .logger import (
     log_download,
     log_session_event,
 )
+from .rate_limiter import RateLimiter
+from .retry_manager import RetryManager, FailureType, FailedItem
+from .validator import (
+    PDFValidator,
+    ValidationStatus,
+    ValidationResult,
+    validate_download,
+)
