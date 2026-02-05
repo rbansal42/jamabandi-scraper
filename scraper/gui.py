@@ -1051,7 +1051,8 @@ class JamabandiGUI:
 
         cmd = [
             sys.executable,
-            str(SRC_DIR / "http_scraper.py"),
+            "-m",
+            "scraper.http_scraper",
             "--cookie",
             cookie,
             "--start",
@@ -1229,7 +1230,8 @@ class JamabandiGUI:
         else:
             cmd = [
                 sys.executable,
-                str(SRC_DIR / "pdf_converter.py"),
+                "-m",
+                "scraper.pdf_converter",
                 "--input",
                 input_dir,
                 "--workers",

@@ -54,8 +54,8 @@ from .validator import PDFValidator, ValidationStatus
 CONFIG = {
     "district_code": "17",
     "tehsil_code": "102",
-    "village_code": "02532",
-    "period": "2023-2024",
+    "village_code": "05464",
+    "period": "2024-25",
     "khewat_start": 1,
     "khewat_end": 1099,
     "min_delay": 1.0,
@@ -63,8 +63,8 @@ CONFIG = {
     "max_retries": 3,
     "page_load_timeout": 30,
     "form_postback_sleep": 0.25,
-    "downloads_dir": "/Volumes/Code/script/downloads_02532",
-    "progress_file": "/Volumes/Code/script/downloads_02532/progress_02532.json",
+    "downloads_dir": "/Volumes/Code/janabandi-scraper/downloads_05464",
+    "progress_file": "/Volumes/Code/janabandi-scraper/downloads_05464/progress_05464.json",
 }
 
 
