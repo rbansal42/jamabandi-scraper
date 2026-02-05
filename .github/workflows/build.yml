@@ -33,7 +33,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: JamabandiScraper-Windows
-          path: dist/JamabandiScraper.exe
+          path: dist/JamabandiScraper/JamabandiScraper.exe
 
   build-macos:
     runs-on: macos-latest
@@ -54,7 +54,7 @@ jobs:
       - name: Install wkhtmltopdf
         run: |
           # Download wkhtmltopdf directly (cask was deprecated)
-          curl -L -o wkhtmltopdf.pkg https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox-0.12.6.1-3.macos-cocoa.pkg
+          curl -L -o wkhtmltopdf.pkg https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6-2/wkhtmltox-0.12.6-2.macos-cocoa.pkg
           sudo installer -pkg wkhtmltopdf.pkg -target /
         continue-on-error: true  # WeasyPrint is fallback if this fails
       
@@ -64,7 +64,7 @@ jobs:
       - name: Create DMG
         run: |
           hdiutil create -volname "Jamabandi Scraper" \
-            -srcfolder "dist/Jamabandi Scraper.app" \
+            -srcfolder "dist/JamabandiScraper.app" \
             -ov -format UDZO \
             dist/JamabandiScraper.dmg
       
