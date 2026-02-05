@@ -45,10 +45,13 @@ hiddenimports = [
     'scraper.retry_manager',
     'scraper.statistics',
     'scraper.pdf_backend',
+    'scraper.update_checker',
     # Third-party dependencies
     'pdfkit',
     'bs4',
     'weasyprint',
+    'pypdf',
+    'packaging',
     'webdriver_manager',
     'requests',
     'yaml',

@@ -22,7 +22,7 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 
 from weasyprint import HTML, CSS
 from weasyprint.text.fonts import FontConfiguration
@@ -168,10 +168,21 @@ def clean_html(html_content: str) -> str:
     return html_content
 
 
-def convert_html_to_pdf(html_path: Path, pdf_path: Path) -> bool:
+def convert_html_to_pdf(
+    html_path: Path, pdf_path: Path, validate: bool = True
+) -> Tuple[bool, Optional[str]]:
     """
     Convert a single HTML file to PDF.
-    Returns True if successful.
+
+    Args:
+        html_path: Path to source HTML file.
+        pdf_path: Path for output PDF file.
+        validate: If True, validate the PDF after conversion.
+
+    Returns:
+        Tuple of (success: bool, error_message: Optional[str]).
+        If successful and valid, returns (True, None).
+        If failed or invalid, returns (False, error_message).
     """
     try:
         logger.info(f"Converting {html_path.name} -> {pdf_path.name}")
@@ -195,13 +206,32 @@ def convert_html_to_pdf(html_path: Path, pdf_path: Path) -> bool:
         # Generate PDF
         html_doc.write_pdf(pdf_path, stylesheets=[css], font_config=font_config)
 
+        # Validate the generated PDF
+        if validate:
+            from .validator import validate_converted_pdf, ValidationStatus
+
+            result = validate_converted_pdf(pdf_path, deep=True)
+            if result.status == ValidationStatus.INVALID:
+                logger.error(
+                    f"PDF validation failed for {pdf_path.name}: {result.message}"
+                )
+                # Remove invalid PDF
+                try:
+                    pdf_path.unlink()
+                except OSError:
+                    pass
+                return False, f"Validation failed: {result.message}"
+            elif result.status == ValidationStatus.WARNING:
+                logger.warning(
+                    f"PDF validation warning for {pdf_path.name}: {result.message}"
+                )
+
         logger.info(f"Converted {pdf_path.name} successfully")
-        return True
+        return True, None
 
     except Exception as e:
         logger.error(f"Failed to convert {html_path.name}: {e}")
-        print(f"    Error: {e}")
-        return False
+        return False, str(e)
 
 
 def process_batch(
@@ -233,7 +263,7 @@ def process_batch(
         html_path = Path(html_path_str)
         pdf_path = Path(pdf_path_str)
 
-        ok = convert_html_to_pdf(html_path, pdf_path)
+        ok, error_msg = convert_html_to_pdf(html_path, pdf_path)
 
         if ok:
             try:
@@ -258,7 +288,8 @@ def process_batch(
                         f"  [Worker {worker_id}] Warning: could not delete {html_path.name}: {e}"
                     )
         else:
-            print(f"  [Worker {worker_id}] FAILED {html_path.name}")
+            error_detail = f": {error_msg}" if error_msg else ""
+            print(f"  [Worker {worker_id}] FAILED {html_path.name}{error_detail}")
             fail_count += 1
             failed_files.append(html_path_str)
 
