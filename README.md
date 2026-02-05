@@ -167,6 +167,18 @@ logging:
 - `concurrency.max_workers` - Maximum concurrent workers
 - `logging.level` - Log level (DEBUG, INFO, WARNING, ERROR)
 
+### PDF Conversion Backend
+
+The scraper supports two PDF conversion backends:
+- **wkhtmltopdf** (default) - Easier to install, bundled in standalone builds
+- **WeasyPrint** - Better CSS support, requires GTK libraries
+
+Configure in `config.yaml`:
+```yaml
+pdf:
+  backend: "auto"  # or "weasyprint" / "wkhtmltopdf"
+```
+
 ---
 
 ## Project Structure
@@ -215,3 +227,20 @@ python scraper/pdf_converter.py --input downloads_05464 --workers 4 --delete-htm
 - tkinter (usually included with Python; on Mac: `brew install python-tk`)
 - Internet connection to access jamabandi.nic.in
 - A valid login session on the Jamabandi website
+
+## Installation Options
+
+### Option 1: Standalone Installer (Recommended)
+
+Download the latest release for your platform:
+- **Windows:** `JamabandiScraper.exe` - Double-click to run
+- **macOS:** `JamabandiScraper.dmg` - Open and drag to Applications
+
+No Python installation required!
+
+### Option 2: Run from Source
+
+If you prefer to run from source code:
+1. Install Python 3.10+
+2. Clone the repository
+3. Run the installer script (see Quick Start)

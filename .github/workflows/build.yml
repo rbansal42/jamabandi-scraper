@@ -1,0 +1,100 @@
+name: Build Installers
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:  # Allow manual trigger
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pdfkit
+      
+      - name: Install wkhtmltopdf
+        run: choco install wkhtmltopdf -y
+      
+      - name: Build executable
+        run: python -m PyInstaller jamabandi.spec --clean
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JamabandiScraper-Windows
+          path: dist/JamabandiScraper.exe
+
+  build-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pyinstaller pdfkit
+      
+      - name: Install wkhtmltopdf
+        run: brew install --cask wkhtmltopdf
+      
+      - name: Build app bundle
+        run: python -m PyInstaller jamabandi.spec --clean
+      
+      - name: Create DMG
+        run: |
+          hdiutil create -volname "Jamabandi Scraper" \
+            -srcfolder "dist/Jamabandi Scraper.app" \
+            -ov -format UDZO \
+            dist/JamabandiScraper.dmg
+      
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: JamabandiScraper-macOS
+          path: dist/JamabandiScraper.dmg
+
+  release:
+    needs: [build-windows, build-macos]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - name: Download Windows artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: JamabandiScraper-Windows
+          path: ./windows
+      
+      - name: Download macOS artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: JamabandiScraper-macOS
+          path: ./macos
+      
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          files: |
+            windows/JamabandiScraper.exe
+            macos/JamabandiScraper.dmg
+          generate_release_notes: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
