@@ -118,6 +118,25 @@ Each download is validated before saving:
 - HTML checked for error patterns (no record, session expired, etc.)
 - PDF validated for correct header and minimum size
 
+### Session Management
+The scraper automatically handles session expiry during long-running scrapes:
+- Monitors HTTP responses for login redirects and expiry messages
+- Pauses all workers when session expires
+- GUI prompts for new cookie without losing progress
+- Resumes from where it left off after re-authentication
+
+### Real-Time Statistics
+Track download progress with live statistics in the GUI:
+- Downloads per minute (speed)
+- Estimated time remaining (ETA)
+- Success rate percentage
+- Total bytes downloaded
+
+### Cookie Capture
+Two methods for obtaining the session cookie:
+- **Manual:** Copy from browser DevTools (always available)
+- **Webview:** Built-in browser window for automatic capture (requires pywebview)
+
 ---
 
 ## Configuration
