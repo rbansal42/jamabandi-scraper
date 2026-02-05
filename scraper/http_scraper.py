@@ -786,7 +786,7 @@ def auto_convert_to_pdf(downloads_dir: str):
         with ProcessPoolExecutor(
             max_workers=pdf_workers,
             initializer=_init_worker,
-            initargs=(shared_counter, shared_total, False),
+            initargs=(shared_counter, shared_total, True),
         ) as executor:
             futures = {}
             for wid, batch in enumerate(batches):
