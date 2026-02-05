@@ -122,23 +122,75 @@ def _get_headers() -> dict:
 
 
 class ProgressTracker:
-    """Thread-safe tracker for downloaded khewat numbers with resume capability."""
+    """Thread-safe tracker for downloaded khewat numbers with resume capability.
 
-    def __init__(self, filepath: str):
+    Features:
+    - Atomic saves using temp file + rename to prevent corruption
+    - Configurable save interval to reduce I/O overhead
+    - Metadata tracking (start_time, stats)
+    - Thread-safe operations with locking
+    """
+
+    def __init__(self, filepath: str, save_interval: int = 5):
+        """Initialize the progress tracker.
+
+        Args:
+            filepath: Path to the progress JSON file
+            save_interval: Number of downloads between automatic saves (default 5)
+        """
         self.filepath = Path(filepath)
+        self.save_interval = save_interval
+        self._unsaved_count = 0
+        self._lock = threading.Lock()
+
         # Resolve relative paths against the script's directory so that
         # "progress.json" doesn't land in an arbitrary CWD.
         if not self.filepath.is_absolute():
             self.filepath = Path(__file__).parent / self.filepath
-        self.data = {"config": {}, "completed": [], "failed": {}, "last_updated": None}
-        self._lock = threading.Lock()
+
+        self.data = {
+            "config": {},
+            "completed": [],
+            "failed": {},
+            "last_updated": None,
+            "stats": {
+                "start_time": None,
+                "total_time": 0,
+                "download_count": 0,
+                "bytes_downloaded": 0,
+            },
+        }
         self.load()
 
     def load(self):
+        """Load progress from file if it exists."""
         if self.filepath.exists():
             try:
                 with open(self.filepath, "r", encoding="utf-8") as f:
-                    self.data = json.load(f)
+                    loaded_data = json.load(f)
+                # Merge with defaults to handle missing keys from older versions
+                for key in self.data:
+                    if key in loaded_data:
+                        self.data[key] = loaded_data[key]
+                # Ensure stats dict has all required keys
+                if "stats" not in self.data or not isinstance(self.data["stats"], dict):
+                    self.data["stats"] = {
+                        "start_time": None,
+                        "total_time": 0,
+                        "download_count": 0,
+                        "bytes_downloaded": 0,
+                    }
+                else:
+                    # Fill in missing stats keys
+                    defaults = {
+                        "start_time": None,
+                        "total_time": 0,
+                        "download_count": 0,
+                        "bytes_downloaded": 0,
+                    }
+                    for k, v in defaults.items():
+                        if k not in self.data["stats"]:
+                            self.data["stats"][k] = v
                 print(
                     f"Loaded progress: {len(self.data['completed'])} completed, "
                     f"{len(self.data['failed'])} failed"
@@ -146,13 +198,28 @@ class ProgressTracker:
             except (json.JSONDecodeError, IOError) as e:
                 print(f"Warning: Could not load progress file: {e}")
 
-    def save(self):
+    def _atomic_save(self) -> None:
+        """Save atomically: write temp file, then rename.
+
+        This prevents data corruption if the process is interrupted during save.
+        """
         self.data["last_updated"] = datetime.now().isoformat()
         self.filepath.parent.mkdir(parents=True, exist_ok=True)
-        with open(self.filepath, "w", encoding="utf-8") as f:
+
+        temp_path = self.filepath.with_suffix(".json.tmp")
+        with open(temp_path, "w", encoding="utf-8") as f:
             json.dump(self.data, f, indent=2)
+        temp_path.replace(self.filepath)  # Atomic rename on POSIX systems
+
+    def flush(self) -> None:
+        """Force save pending changes."""
+        with self._lock:
+            if self._unsaved_count > 0:
+                self._atomic_save()
+                self._unsaved_count = 0
 
     def set_config(self, config: dict):
+        """Set the scraping configuration and initialize stats."""
         with self._lock:
             self.data["config"] = {
                 "district": config["district_code"],
@@ -160,27 +227,53 @@ class ProgressTracker:
                 "village": config["village_code"],
                 "period": config["period"],
             }
-            self.save()
+            # Record start time if not already set
+            if self.data["stats"]["start_time"] is None:
+                self.data["stats"]["start_time"] = datetime.now().isoformat()
+            self._atomic_save()
+            self._unsaved_count = 0
 
-    def mark_complete(self, khewat: int):
+    def mark_complete(self, khewat: int, bytes_downloaded: int = 0):
+        """Mark a khewat as successfully downloaded.
+
+        Args:
+            khewat: The khewat number that was downloaded
+            bytes_downloaded: Number of bytes in the downloaded file
+        """
         with self._lock:
             if khewat not in self.data["completed"]:
                 self.data["completed"].append(khewat)
                 self.data["completed"].sort()
+                self.data["stats"]["download_count"] += 1
+                self.data["stats"]["bytes_downloaded"] += bytes_downloaded
             self.data["failed"].pop(str(khewat), None)
-            self.save()
+            self._unsaved_count += 1
+            if self._unsaved_count >= self.save_interval:
+                self._atomic_save()
+                self._unsaved_count = 0
 
     def mark_failed(self, khewat: int, error: str):
+        """Mark a khewat as failed with an error message.
+
+        Args:
+            khewat: The khewat number that failed
+            error: Description of the error
+        """
         with self._lock:
             self.data["failed"][str(khewat)] = error
-            self.save()
+            self._unsaved_count += 1
+            if self._unsaved_count >= self.save_interval:
+                self._atomic_save()
+                self._unsaved_count = 0
 
     def get_pending(self, start: int, end: int) -> list:
+        """Get list of khewat numbers that haven't been downloaded yet."""
         with self._lock:
             completed_set = set(self.data["completed"])
             return [k for k in range(start, end + 1) if k not in completed_set]
 
     def get_summary(self) -> str:
+        """Get a human-readable summary of progress."""
         with self._lock:
             total = CONFIG["khewat_end"] - CONFIG["khewat_start"] + 1
             return (
@@ -188,6 +281,11 @@ class ProgressTracker:
                 f"Failed: {len(self.data['failed'])}, "
                 f"Pending: {total - len(self.data['completed'])}"
             )
+
+    def get_stats(self) -> dict:
+        """Get download statistics."""
+        with self._lock:
+            return self.data["stats"].copy()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
