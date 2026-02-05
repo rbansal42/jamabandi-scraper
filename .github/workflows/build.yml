@@ -33,7 +33,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: JamabandiScraper-Windows
-          path: dist/JamabandiScraper/JamabandiScraper.exe
+          path: dist/JamabandiScraper.exe
 
   build-macos:
     runs-on: macos-latest
