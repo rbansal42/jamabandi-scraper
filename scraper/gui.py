@@ -23,6 +23,9 @@ SRC_DIR = Path(__file__).parent.resolve()  # scraper/ — where .py files live
 PROJECT_DIR = SRC_DIR.parent.resolve()  # project root — data & config here
 GUI_CONFIG_FILE = PROJECT_DIR / "gui_config.json"
 
+# Detect if running as a frozen PyInstaller executable
+IS_FROZEN = getattr(sys, "frozen", False)
+
 
 def _get_gui_defaults() -> dict:
     """Get GUI defaults from config."""
@@ -112,6 +115,7 @@ class JamabandiGUI:
 
         self.process: subprocess.Popen | None = None
         self.thread: threading.Thread | None = None
+        self._inprocess_running = False  # Track in-process execution (for frozen apps)
         self.advanced_unlocked = False
         self._scrape_total = 0
         self._scrape_done_count = 0
@@ -923,12 +927,95 @@ class JamabandiGUI:
                 self.root.after_cancel(self._stats_update_job)
                 self._stats_update_job = None
 
+    def _run_in_process(self, target_func, args: tuple, label: str, on_complete=None):
+        """Run a function in-process in a background thread.
+
+        Used when running as a frozen PyInstaller app where subprocess spawning
+        would re-launch the main app instead of running the script.
+
+        Args:
+            target_func: The function to call (e.g., http_scraper.main with simulated args)
+            args: Arguments to pass to the function
+            label: Display label for log messages
+            on_complete: Optional callback(exit_code) called on the main thread after completion
+        """
+        import io
+        import contextlib
+
+        self._set_running(True)
+        self._set_status(f"Running: {label}...")
+        self._set_progress(0)
+        self._log(f"[In-process] Starting {label}...\n\n")
+
+        # Flag to track if running (for cancellation)
+        self._inprocess_running = True
+
+        def run_and_capture():
+            exit_code = 0
+            try:
+                # Capture stdout to redirect to GUI log
+                old_stdout = sys.stdout
+                old_stderr = sys.stderr
+
+                class GUIWriter:
+                    """Redirect writes to the GUI log area."""
+
+                    def __init__(writer_self, gui_log_func):
+                        writer_self.gui_log = gui_log_func
+                        writer_self.buffer = ""
+
+                    def write(writer_self, text):
+                        if text:
+                            # Queue log update on main thread
+                            writer_self.gui_log(text)
+
+                    def flush(writer_self):
+                        pass
+
+                gui_writer = GUIWriter(self._log)
+                sys.stdout = gui_writer
+                sys.stderr = gui_writer
+
+                try:
+                    target_func(*args)
+                except SystemExit as e:
+                    # Handle sys.exit() calls from the script
+                    exit_code = e.code if isinstance(e.code, int) else 1
+                except Exception as e:
+                    self._log(f"\nERROR: {e}\n")
+                    import traceback
+
+                    self._log(traceback.format_exc())
+                    exit_code = 1
+                finally:
+                    sys.stdout = old_stdout
+                    sys.stderr = old_stderr
+
+            finally:
+                self._inprocess_running = False
+
+                def finish():
+                    self._set_running(False)
+                    if exit_code == 0:
+                        self._set_status("Completed successfully")
+                        self._set_progress(100)
+                    else:
+                        self._set_status(f"Exited with code {exit_code}")
+                    self._log(f"\n--- {label} finished (exit code {exit_code}) ---\n")
+                    if on_complete:
+                        on_complete(exit_code)
+
+                self.root.after(0, finish)
+
+        self.thread = threading.Thread(target=run_and_capture, daemon=True)
+        self.thread.start()
+
     # ─────────────────────────────────────────────────────────────────────
     # ACTIONS
     # ─────────────────────────────────────────────────────────────────────
 
     def _start_scraping(self):
-        if self.process and self.process.poll() is None:
+        if (self.process and self.process.poll() is None) or self._inprocess_running:
             messagebox.showwarning(
                 "Busy", "A process is already running. Stop it first."
             )
@@ -985,7 +1072,41 @@ class JamabandiGUI:
         if cfg.get("auto_convert_pdf", False):
             on_done = self._on_scraping_complete
 
-        self._launch(cmd, "Scraper", on_complete=on_done)
+        if IS_FROZEN:
+            # When running as frozen PyInstaller app, run scraper in-process
+            # to avoid subprocess re-launching the main app
+            workers = 1
+            if cfg.get("concurrent_enabled", False):
+                workers = cfg.get("concurrent_workers", 3)
+                workers = max(3, min(8, workers))
+                self._log(f"Concurrent mode: {workers} workers\n")
+
+            def run_scraper():
+                from . import http_scraper
+
+                # The config is already patched via _patch_main_http_config()
+                if workers > 1:
+                    http_scraper.run_concurrent(cookie, http_scraper.CONFIG, workers)
+                else:
+                    from .http_scraper import ProgressTracker, JamabandiHTTPScraper
+
+                    progress = ProgressTracker(http_scraper.CONFIG["progress_file"])
+                    print(f"\nCurrent status: {progress.get_summary()}")
+                    pending = progress.get_pending(
+                        http_scraper.CONFIG["khewat_start"],
+                        http_scraper.CONFIG["khewat_end"],
+                    )
+                    if not pending:
+                        print("\nAll khewat numbers already processed!")
+                        return
+                    scraper = JamabandiHTTPScraper(
+                        cookie, http_scraper.CONFIG, progress
+                    )
+                    scraper.run()
+
+            self._run_in_process(run_scraper, (), "Scraper", on_complete=on_done)
+        else:
+            self._launch(cmd, "Scraper", on_complete=on_done)
 
     def _start_pdf_conversion(self, input_dir_override: str = None):
         """Manually or automatically trigger PDF conversion.
@@ -994,7 +1115,7 @@ class JamabandiGUI:
             input_dir_override: If provided, use this as input dir instead of
                                 the GUI field (used by auto-convert).
         """
-        if self.process and self.process.poll() is None:
+        if (self.process and self.process.poll() is None) or self._inprocess_running:
             messagebox.showwarning(
                 "Busy", "A process is already running. Stop it first."
             )
@@ -1019,20 +1140,107 @@ class JamabandiGUI:
 
         workers = cfg.get("pdf_workers", 4)
 
-        cmd = [
-            sys.executable,
-            str(SRC_DIR / "pdf_converter.py"),
-            "--input",
-            input_dir,
-            "--workers",
-            str(workers),
-            "--skip-existing",
-            "--delete-html",
-        ]
-        if output_dir:
-            cmd += ["--output", output_dir]
+        if IS_FROZEN:
+            # When running as frozen PyInstaller app, run converter in-process
+            def run_pdf_converter():
+                from . import pdf_converter
+                from pathlib import Path
 
-        self._launch(cmd, "PDF Converter")
+                input_path = Path(input_dir)
+                output_path = Path(output_dir) if output_dir else input_path
+                output_path.mkdir(parents=True, exist_ok=True)
+
+                html_files = sorted(input_path.glob("nakal_khewat_*.html"))
+                if not html_files:
+                    print(f"No HTML files found in {input_path}")
+                    return
+
+                # Build file pairs, skipping existing
+                file_pairs = []
+                skipped = 0
+                for html_path in html_files:
+                    pdf_path = output_path / (html_path.stem + ".pdf")
+                    if pdf_path.exists():
+                        skipped += 1
+                        continue
+                    file_pairs.append((str(html_path), str(pdf_path)))
+
+                if skipped > 0:
+                    print(f"Skipped {skipped} files with existing PDFs")
+
+                if not file_pairs:
+                    print("No files to convert after filtering.")
+                    return
+
+                total_files = len(file_pairs)
+                num_workers = min(workers, total_files)
+
+                print(f"Converting {total_files} HTML files to PDF...")
+                print(f"Output directory: {output_path}")
+                print(f"Workers: {num_workers}")
+                print()
+
+                import multiprocessing
+                from concurrent.futures import ProcessPoolExecutor, as_completed
+                import time
+
+                batches = pdf_converter.split_into_batches(file_pairs, num_workers)
+                shared_counter = multiprocessing.Value("i", 0)
+                shared_total = multiprocessing.Value("i", total_files)
+
+                start_time = time.time()
+                results = []
+
+                with ProcessPoolExecutor(
+                    max_workers=num_workers,
+                    initializer=pdf_converter._init_worker,
+                    initargs=(shared_counter, shared_total, True),  # delete_html=True
+                ) as executor:
+                    futures = {}
+                    for worker_id, batch in enumerate(batches):
+                        if not batch:
+                            continue
+                        future = executor.submit(
+                            pdf_converter.process_batch, worker_id, batch
+                        )
+                        futures[future] = worker_id
+
+                    for future in as_completed(futures):
+                        worker_id = futures[future]
+                        try:
+                            result = future.result()
+                            results.append(result)
+                        except Exception as e:
+                            print(f"  [Worker {worker_id}] crashed: {e}")
+                            results.append({"success_count": 0, "fail_count": 0})
+
+                elapsed = time.time() - start_time
+                total_success = sum(r.get("success_count", 0) for r in results)
+                total_fail = sum(r.get("fail_count", 0) for r in results)
+
+                print()
+                print("=" * 50)
+                print(f"Conversion complete in {elapsed:.1f}s")
+                print(f"  Success: {total_success}")
+                print(f"  Failed: {total_fail}")
+                print("=" * 50)
+
+            self._run_in_process(run_pdf_converter, (), "PDF Converter")
+        else:
+            cmd = [
+                sys.executable,
+                str(SRC_DIR / "pdf_converter.py"),
+                "--input",
+                input_dir,
+                "--workers",
+                str(workers),
+                "--skip-existing",
+                "--delete-html",
+            ]
+            if output_dir:
+                cmd += ["--output", output_dir]
+
+            self._launch(cmd, "PDF Converter")
 
     def _on_scraping_complete(self, exit_code: int):
         """Called after scraper finishes when auto-convert is enabled."""
