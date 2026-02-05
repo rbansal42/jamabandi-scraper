@@ -31,6 +31,15 @@ sys.path.insert(0, str(Path(__file__).parent))
 import requests
 from bs4 import BeautifulSoup
 
+from .config import get_config
+from .logger import (
+    get_logger,
+    setup_logging,
+    log_http_request,
+    log_download,
+    log_session_event,
+)
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # CONFIGURATION
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -51,23 +60,60 @@ CONFIG = {
     "progress_file": "/Volumes/Code/script/downloads_02532/progress_02532.json",
 }
 
-# URLs
-BASE_URL = "https://jamabandi.nic.in"
-FORM_URL = f"{BASE_URL}/PublicNakal/CreateNewRequest"
 
-# Headers to mimic browser
-HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:147.0) Gecko/20100101 Firefox/147.0",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.9",
-    "Accept-Encoding": "gzip, deflate, br",
-    "Connection": "keep-alive",
-    "Upgrade-Insecure-Requests": "1",
-    "Sec-Fetch-Dest": "document",
-    "Sec-Fetch-Mode": "navigate",
-    "Sec-Fetch-Site": "same-origin",
-    "Sec-Fetch-User": "?1",
-}
+def _get_urls() -> tuple:
+    """Get URLs from config."""
+    config = get_config()
+    base = config.urls.get("base_url", "https://jamabandi.nic.in")
+    form_path = config.urls.get("form_path", "/PublicNakal/CreateNewRequest")
+    return base, f"{base}{form_path}"
+
+
+def _build_headers() -> dict:
+    """Build HTTP headers from config."""
+    config = get_config()
+    return {
+        "User-Agent": config.http.get("user_agent", "Mozilla/5.0"),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "keep-alive",
+        "Upgrade-Insecure-Requests": "1",
+        "Sec-Fetch-Dest": "document",
+        "Sec-Fetch-Mode": "navigate",
+        "Sec-Fetch-Site": "same-origin",
+        "Sec-Fetch-User": "?1",
+    }
+
+
+# Module-level cached values (computed on first access)
+_BASE_URL = None
+_FORM_URL = None
+_HEADERS = None
+
+
+def _get_base_url() -> str:
+    """Get cached base URL."""
+    global _BASE_URL
+    if _BASE_URL is None:
+        _BASE_URL, _ = _get_urls()
+    return _BASE_URL
+
+
+def _get_form_url() -> str:
+    """Get cached form URL."""
+    global _FORM_URL
+    if _FORM_URL is None:
+        _, _FORM_URL = _get_urls()
+    return _FORM_URL
+
+
+def _get_headers() -> dict:
+    """Get cached headers."""
+    global _HEADERS
+    if _HEADERS is None:
+        _HEADERS = _build_headers()
+    return _HEADERS
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -156,22 +202,31 @@ class JamabandiHTTPScraper:
     """
 
     def __init__(self, session_cookie: str, config: dict, progress: ProgressTracker):
+        # Initialize logging
+        setup_logging()
+        self.logger = get_logger()
+        log_session_event("Scraper initialized")
+
         self.config = config
         self.progress = progress
         self.downloads_dir = Path(config["downloads_dir"])
         self.downloads_dir.mkdir(exist_ok=True)
 
+        # Get config-based values
+        self._app_config = get_config()
+        headers = _get_headers()
+
         # Send cookie as a raw header instead of using the cookie jar.
         # On Windows, system proxies / cookie-jar domain matching can
         # silently strip cookies. A raw header is always forwarded.
         self.session = requests.Session()
-        self.session.headers.update(HEADERS)
+        self.session.headers.update(headers)
         self.session.headers["Cookie"] = f"jamabandiID={session_cookie}"
 
         # Disable SSL verification (site has certificate issues).
         # trust_env=False stops requests from picking up Windows system
         # proxy settings that can intercept/modify HTTPS traffic.
-        self.session.verify = False
+        self.session.verify = self._app_config.http.get("verify_ssl", False)
         self.session.trust_env = False
         # Suppress SSL warnings
         import urllib3
@@ -211,6 +266,10 @@ class JamabandiHTTPScraper:
         self, event_target: str, extra_data: dict = None
     ) -> requests.Response:
         """Make an ASP.NET postback request."""
+        form_url = _get_form_url()
+        headers = _get_headers()
+        timeout = self._app_config.http.get("timeout", 30)
+
         data = {
             "__EVENTTARGET": event_target,
             "__EVENTARGUMENT": "",
@@ -225,48 +284,66 @@ class JamabandiHTTPScraper:
         if extra_data:
             data.update(extra_data)
 
+        start_time = time.time()
         response = self.session.post(
-            FORM_URL,
+            form_url,
             data=data,
-            headers={**HEADERS, "Referer": FORM_URL},
+            headers={**headers, "Referer": form_url},
             allow_redirects=True,
+            timeout=timeout,
         )
+        elapsed_ms = (time.time() - start_time) * 1000
+        log_http_request("POST", form_url, response.status_code, elapsed_ms)
+
         return response
 
     def initialize_form(self) -> bool:
         """Load the form page and extract initial tokens."""
-        print("Loading form page...")
+        form_url = _get_form_url()
+        headers = _get_headers()
+        timeout = self._app_config.http.get("timeout", 30)
 
-        response = self.session.get(FORM_URL, headers=HEADERS)
+        self.logger.info("Loading form page...")
+
+        start_time = time.time()
+        response = self.session.get(form_url, headers=headers, timeout=timeout)
+        elapsed_ms = (time.time() - start_time) * 1000
+        log_http_request("GET", form_url, response.status_code, elapsed_ms)
 
         if response.status_code != 200:
-            print(f"  Failed to load form: HTTP {response.status_code}")
+            self.logger.error(f"Failed to load form: HTTP {response.status_code}")
             return False
 
         if not self._check_logged_in(response.text):
             # Show diagnostic info to help debug cookie / redirect issues
-            print(f"  Session invalid - not logged in!")
-            print(f"  Final URL: {response.url}")
+            self.logger.error("Session invalid - not logged in!")
+            self.logger.debug(f"Final URL: {response.url}")
             if response.history:
-                print(f"  Redirects: {' -> '.join(r.url for r in response.history)}")
+                self.logger.debug(
+                    f"Redirects: {' -> '.join(r.url for r in response.history)}"
+                )
             snippet = response.text[:500].replace("\n", " ").strip()
-            print(f"  Response snippet: {snippet[:200]}...")
+            self.logger.debug(f"Response snippet: {snippet[:200]}...")
             return False
 
         if not self._parse_asp_tokens(response.text):
-            print("  Failed to parse ASP.NET tokens")
+            self.logger.error("Failed to parse ASP.NET tokens")
             return False
 
-        print("  Form loaded successfully")
+        self.logger.info("Form loaded successfully")
+        log_session_event("Form initialized")
         return True
 
     def setup_form_selections(self) -> bool:
         """Set up all form selections (district, tehsil, village, period)."""
-        print("Setting up form selections...")
-        postback_sleep = self.config.get("form_postback_sleep", 0.25)
+        self.logger.info("Setting up form selections...")
+        # Use config-based delay, fall back to local config, then default
+        postback_sleep = self._app_config.delays.get(
+            "form_postback_sleep", self.config.get("form_postback_sleep", 0.25)
+        )
 
         # Step 1: Select "By Khewat" radio
-        print("  Selecting: By Khewat")
+        self.logger.debug("Selecting: By Khewat")
         form_data = {
             "a": "RdobtnKhewat",
             "ddldname": "-1",
@@ -276,12 +353,12 @@ class JamabandiHTTPScraper:
         }
         response = self._make_postback("RdobtnKhewat", form_data)
         if not self._parse_asp_tokens(response.text):
-            print("    Failed after radio selection")
+            self.logger.error("Failed after radio selection")
             return False
         time.sleep(postback_sleep)
 
         # Step 2: Select District
-        print(f"  Selecting district: {self.config['district_code']}")
+        self.logger.debug(f"Selecting district: {self.config['district_code']}")
         form_data = {
             "a": "RdobtnKhewat",
             "ddldname": self.config["district_code"],
@@ -291,12 +368,12 @@ class JamabandiHTTPScraper:
         }
         response = self._make_postback("ddldname", form_data)
         if not self._parse_asp_tokens(response.text):
-            print("    Failed after district selection")
+            self.logger.error("Failed after district selection")
             return False
         time.sleep(postback_sleep)
 
         # Step 3: Select Tehsil
-        print(f"  Selecting tehsil: {self.config['tehsil_code']}")
+        self.logger.debug(f"Selecting tehsil: {self.config['tehsil_code']}")
         form_data = {
             "a": "RdobtnKhewat",
             "ddldname": self.config["district_code"],
@@ -306,12 +383,12 @@ class JamabandiHTTPScraper:
         }
         response = self._make_postback("ddltname", form_data)
         if not self._parse_asp_tokens(response.text):
-            print("    Failed after tehsil selection")
+            self.logger.error("Failed after tehsil selection")
             return False
         time.sleep(postback_sleep)
 
         # Step 4: Select Village
-        print(f"  Selecting village: {self.config['village_code']}")
+        self.logger.debug(f"Selecting village: {self.config['village_code']}")
         form_data = {
             "a": "RdobtnKhewat",
             "ddldname": self.config["district_code"],
@@ -321,12 +398,12 @@ class JamabandiHTTPScraper:
         }
         response = self._make_postback("ddlvname", form_data)
         if not self._parse_asp_tokens(response.text):
-            print("    Failed after village selection")
+            self.logger.error("Failed after village selection")
             return False
         time.sleep(postback_sleep)
 
         # Step 5: Select Period
-        print(f"  Selecting period: {self.config['period']}")
+        self.logger.debug(f"Selecting period: {self.config['period']}")
         form_data = {
             "a": "RdobtnKhewat",
             "ddldname": self.config["district_code"],
@@ -336,26 +413,31 @@ class JamabandiHTTPScraper:
         }
         response = self._make_postback("ddlPeriod", form_data)
         if not self._parse_asp_tokens(response.text):
-            print("    Failed after period selection")
+            self.logger.error("Failed after period selection")
             return False
 
         # Check if khewat dropdown is now available
         if "ddlkhewat" in response.text.lower():
-            print("  Form setup complete!")
+            self.logger.info("Form setup complete!")
+            log_session_event("Form selections complete")
             self.form_initialized = True
             return True
         else:
-            print("  Warning: Khewat dropdown not found after setup")
+            self.logger.warning("Khewat dropdown not found after setup")
             # Save response for debugging
             debug_path = self.downloads_dir / "debug_form.html"
             with open(debug_path, "w", encoding="utf-8") as f:
                 f.write(response.text)
-            print(f"  Saved response to {debug_path}")
+            self.logger.debug(f"Saved response to {debug_path}")
             return False
 
     def download_nakal(self, khewat: int) -> bool:
         """Download Nakal for a specific khewat number."""
-        print(f"  Processing khewat {khewat}...")
+        self.logger.info(f"Processing khewat {khewat}...")
+
+        form_url = _get_form_url()
+        headers = _get_headers()
+        timeout = self._app_config.http.get("timeout", 30)
 
         # Build form data for Nakal submission
         form_data = {
@@ -377,18 +459,24 @@ class JamabandiHTTPScraper:
             form_data["__EVENTVALIDATION"] = self.event_validation
 
         try:
+            start_time = time.time()
             response = self.session.post(
-                FORM_URL,
+                form_url,
                 data=form_data,
-                headers={**HEADERS, "Referer": FORM_URL},
+                headers={**headers, "Referer": form_url},
                 allow_redirects=True,
-                timeout=30,
+                timeout=timeout,
             )
+            elapsed_ms = (time.time() - start_time) * 1000
+            log_http_request("POST", form_url, response.status_code, elapsed_ms)
 
             # Check response
             if response.status_code != 200:
-                print(f"    HTTP Error: {response.status_code}")
+                self.logger.error(
+                    f"HTTP Error: {response.status_code} for khewat {khewat}"
+                )
                 self.progress.mark_failed(khewat, f"HTTP {response.status_code}")
+                log_download(khewat, False, f"HTTP {response.status_code}")
                 return True  # Continue to next
 
             # Check if session expired
@@ -396,7 +484,8 @@ class JamabandiHTTPScraper:
                 "login.aspx" in response.url.lower()
                 or "login.aspx" in response.text.lower()
             ):
-                print("    Session expired!")
+                self.logger.error("Session expired!")
+                log_session_event("Session expired")
                 return False  # Need re-auth
 
             # Check for "no record" message
@@ -404,8 +493,9 @@ class JamabandiHTTPScraper:
                 "no record" in response.text.lower()
                 or "record not found" in response.text.lower()
             ):
-                print(f"    No record found for khewat {khewat}")
+                self.logger.warning(f"No record found for khewat {khewat}")
                 self.progress.mark_failed(khewat, "No record found")
+                log_download(khewat, False, "No record found")
                 self._parse_asp_tokens(response.text)  # Update tokens
                 return True
 
@@ -414,10 +504,11 @@ class JamabandiHTTPScraper:
                 "error page" in response.text.lower()
                 or "some error has occured" in response.text.lower()
             ):
-                print(
-                    f"    Error page returned for khewat {khewat} - will retry after form refresh"
+                self.logger.warning(
+                    f"Error page returned for khewat {khewat} - will retry after form refresh"
                 )
                 self.progress.mark_failed(khewat, "Error page - needs retry")
+                log_download(khewat, False, "Error page - needs retry")
                 # Need to re-setup the form
                 self.form_initialized = False
                 return True
@@ -431,8 +522,11 @@ class JamabandiHTTPScraper:
                 filepath = self.downloads_dir / filename
                 with open(filepath, "wb") as f:
                     f.write(response.content)
-                print(f"    Saved: {filename} ({len(response.content)} bytes)")
+                self.logger.info(f"Saved: {filename} ({len(response.content)} bytes)")
                 self.progress.mark_complete(khewat)
+                log_download(
+                    khewat, True, f"{filename} ({len(response.content)} bytes)"
+                )
             else:
                 # HTML response - check if it's actual Nakal content (should be large)
                 if len(response.text) > 10000 and "nakal" in response.text.lower():
@@ -441,15 +535,21 @@ class JamabandiHTTPScraper:
                     filepath = self.downloads_dir / filename
                     with open(filepath, "w", encoding="utf-8") as f:
                         f.write(response.text)
-                    print(f"    Saved: {filename} ({len(response.text)} bytes)")
+                    self.logger.info(f"Saved: {filename} ({len(response.text)} bytes)")
                     self.progress.mark_complete(khewat)
+                    log_download(
+                        khewat, True, f"{filename} ({len(response.text)} bytes)"
+                    )
                 else:
                     # Probably an error or empty response
-                    print(
-                        f"    Unexpected small response ({len(response.text)} bytes) for khewat {khewat}"
+                    self.logger.warning(
+                        f"Unexpected small response ({len(response.text)} bytes) for khewat {khewat}"
                     )
                     self.progress.mark_failed(
                         khewat, f"Small response: {len(response.text)} bytes"
+                    )
+                    log_download(
+                        khewat, False, f"Small response: {len(response.text)} bytes"
                     )
 
             # After viewing Nakal, we're on a different page - need to re-setup form
@@ -457,26 +557,29 @@ class JamabandiHTTPScraper:
             return True
 
         except requests.Timeout:
-            print(f"    Timeout for khewat {khewat}")
+            self.logger.error(f"Timeout for khewat {khewat}")
             self.progress.mark_failed(khewat, "Timeout")
+            log_download(khewat, False, "Timeout")
             return True
         except Exception as e:
-            print(f"    Error: {e}")
+            self.logger.exception(f"Error downloading khewat {khewat}: {e}")
             self.progress.mark_failed(khewat, str(e))
+            log_download(khewat, False, str(e))
             return True
 
     def run(self):
         """Main scraping loop."""
+        log_session_event("Scraping started")
         self.progress.set_config(self.config)
 
         # Initialize form
         if not self.initialize_form():
-            print("\nFailed to initialize. Please check your session cookie.")
+            self.logger.error("Failed to initialize. Please check your session cookie.")
             return
 
         # Setup form selections
         if not self.setup_form_selections():
-            print("\nFailed to setup form. Session may have expired.")
+            self.logger.error("Failed to setup form. Session may have expired.")
             return
 
         # Get pending khewat numbers
@@ -484,47 +587,61 @@ class JamabandiHTTPScraper:
             self.config["khewat_start"], self.config["khewat_end"]
         )
 
-        print(f"\nProcessing {len(pending)} khewat numbers...")
-        print(f"Progress: {self.progress.get_summary()}")
-        print()
+        self.logger.info(f"Processing {len(pending)} khewat numbers...")
+        self.logger.info(f"Progress: {self.progress.get_summary()}")
+
+        # Get delays from config
+        min_delay = self._app_config.delays.get(
+            "min_delay", self.config.get("min_delay", 1.0)
+        )
+        max_delay = self._app_config.delays.get(
+            "max_delay", self.config.get("max_delay", 2.5)
+        )
 
         for i, khewat in enumerate(pending):
             # Check if we need to re-setup the form (after errors)
             if not self.form_initialized:
-                print("  Re-initializing form...")
+                self.logger.info("Re-initializing form...")
                 if not self.initialize_form():
-                    print("\nSession expired during re-init. Please get new cookie.")
+                    self.logger.error(
+                        "Session expired during re-init. Please get new cookie."
+                    )
                     break
                 if not self.setup_form_selections():
-                    print("\nFailed to re-setup form. Session may have expired.")
+                    self.logger.error(
+                        "Failed to re-setup form. Session may have expired."
+                    )
                     break
 
             success = self.download_nakal(khewat)
 
             if not success:
-                print("\nSession expired. Please get a new cookie and restart.")
+                self.logger.error(
+                    "Session expired. Please get a new cookie and restart."
+                )
                 break
 
             # Rate limiting
             if i < len(pending) - 1:  # Don't wait after last one
-                delay = random.uniform(
-                    self.config["min_delay"], self.config["max_delay"]
-                )
-                print(f"    Waiting {delay:.1f}s...")
+                delay = random.uniform(min_delay, max_delay)
+                self.logger.debug(f"Waiting {delay:.1f}s...")
                 time.sleep(delay)
 
         # Summary
-        print("\n" + "=" * 60)
-        print("SCRAPING COMPLETE")
-        print("=" * 60)
-        print(f"Final status: {self.progress.get_summary()}")
+        log_session_event("Scraping complete", self.progress.get_summary())
+        self.logger.info("=" * 60)
+        self.logger.info("SCRAPING COMPLETE")
+        self.logger.info("=" * 60)
+        self.logger.info(f"Final status: {self.progress.get_summary()}")
 
         if self.progress.data["failed"]:
-            print("\nFailed khewat numbers:")
+            self.logger.warning("Failed khewat numbers:")
             for k, error in list(self.progress.data["failed"].items())[:10]:
-                print(f"  - Khewat {k}: {error}")
+                self.logger.warning(f"  - Khewat {k}: {error}")
             if len(self.progress.data["failed"]) > 10:
-                print(f"  ... and {len(self.progress.data['failed']) - 10} more")
+                self.logger.warning(
+                    f"  ... and {len(self.progress.data['failed']) - 10} more"
+                )
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -543,11 +660,17 @@ def _worker_run(
     Worker function for concurrent downloads.
     Each worker creates its own HTTP session and processes its batch independently.
     """
+    logger = get_logger(f"worker-{worker_id}")
     tag = f"[W{worker_id}]"
-    print(f"{tag} Starting with {len(batch)} khewats: {batch[0]}-{batch[-1]}")
+    logger.info(f"{tag} Starting with {len(batch)} khewats: {batch[0]}-{batch[-1]}")
 
     # Create an independent scraper with its own session
     scraper = JamabandiHTTPScraper(session_cookie, config, progress)
+
+    # Get delays from config
+    app_config = get_config()
+    min_delay = app_config.delays.get("min_delay", config.get("min_delay", 1.0))
+    max_delay = app_config.delays.get("max_delay", config.get("max_delay", 2.5))
 
     for i, khewat in enumerate(batch):
         # Skip if already completed (another worker or previous run)
@@ -557,26 +680,26 @@ def _worker_run(
 
         # Initialize form if needed
         if not scraper.form_initialized:
-            print(f"{tag} Initializing form...")
+            logger.info(f"{tag} Initializing form...")
             if not scraper.initialize_form():
-                print(f"{tag} Session expired during init. Stopping worker.")
+                logger.error(f"{tag} Session expired during init. Stopping worker.")
                 return
             if not scraper.setup_form_selections():
-                print(f"{tag} Form setup failed. Stopping worker.")
+                logger.error(f"{tag} Form setup failed. Stopping worker.")
                 return
 
         success = scraper.download_nakal(khewat)
 
         if not success:
-            print(f"{tag} Session expired. Stopping worker.")
+            logger.error(f"{tag} Session expired. Stopping worker.")
             return
 
         # Rate limiting
         if i < len(batch) - 1:
-            delay = random.uniform(config["min_delay"], config["max_delay"])
+            delay = random.uniform(min_delay, max_delay)
             time.sleep(delay)
 
-    print(f"{tag} Finished batch.")
+    logger.info(f"{tag} Finished batch.")
 
 
 def run_concurrent(session_cookie: str, config: dict, num_workers: int):
@@ -584,21 +707,26 @@ def run_concurrent(session_cookie: str, config: dict, num_workers: int):
     Run the scraper with multiple concurrent workers.
     Splits pending khewats into batches and assigns each to a worker thread.
     """
+    # Initialize logging for concurrent mode
+    setup_logging()
+    logger = get_logger()
+    log_session_event("Concurrent scraping started", f"{num_workers} workers requested")
+
     progress = ProgressTracker(config["progress_file"])
     progress.set_config(config)
 
     pending = progress.get_pending(config["khewat_start"], config["khewat_end"])
     if not pending:
-        print("\nAll khewat numbers already processed!")
+        logger.info("All khewat numbers already processed!")
         return
 
     # Cap workers to number of pending items
     actual_workers = min(num_workers, len(pending))
 
-    print(
-        f"\nConcurrent mode: {actual_workers} workers for {len(pending)} pending khewats"
+    logger.info(
+        f"Concurrent mode: {actual_workers} workers for {len(pending)} pending khewats"
     )
-    print(f"Progress: {progress.get_summary()}")
+    logger.info(f"Progress: {progress.get_summary()}")
 
     # Split into contiguous chunk-based batches (no round-robin so each worker
     # handles a contiguous range, reducing form re-init overhead)
@@ -611,12 +739,13 @@ def run_concurrent(session_cookie: str, config: dict, num_workers: int):
         batches.append(pending[start:end])
         start = end
 
-    # Print batch assignments
-    print("\nBatch assignments:")
+    # Log batch assignments
+    logger.info("Batch assignments:")
     for idx, batch in enumerate(batches):
         if batch:
-            print(f"  Worker {idx}: khewat {batch[0]}-{batch[-1]} ({len(batch)} items)")
-    print()
+            logger.info(
+                f"  Worker {idx}: khewat {batch[0]}-{batch[-1]} ({len(batch)} items)"
+            )
 
     start_time = time.time()
 
@@ -635,22 +764,23 @@ def run_concurrent(session_cookie: str, config: dict, num_workers: int):
             try:
                 future.result()
             except Exception as e:
-                print(f"[W{wid}] Worker crashed: {e}")
+                logger.exception(f"[W{wid}] Worker crashed: {e}")
 
     elapsed = time.time() - start_time
 
-    print("\n" + "=" * 60)
-    print("CONCURRENT SCRAPING COMPLETE")
-    print("=" * 60)
-    print(f"Time elapsed: {elapsed:.1f}s")
-    print(f"Final status: {progress.get_summary()}")
+    log_session_event("Concurrent scraping complete", f"elapsed={elapsed:.1f}s")
+    logger.info("=" * 60)
+    logger.info("CONCURRENT SCRAPING COMPLETE")
+    logger.info("=" * 60)
+    logger.info(f"Time elapsed: {elapsed:.1f}s")
+    logger.info(f"Final status: {progress.get_summary()}")
 
     if progress.data["failed"]:
-        print("\nFailed khewat numbers:")
+        logger.warning("Failed khewat numbers:")
         for k, error in list(progress.data["failed"].items())[:10]:
-            print(f"  - Khewat {k}: {error}")
+            logger.warning(f"  - Khewat {k}: {error}")
         if len(progress.data["failed"]) > 10:
-            print(f"  ... and {len(progress.data['failed']) - 10} more")
+            logger.warning(f"  ... and {len(progress.data['failed']) - 10} more")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
