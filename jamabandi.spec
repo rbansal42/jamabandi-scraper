@@ -6,6 +6,7 @@ Build with: pyinstaller jamabandi.spec --clean
 Or use: python build.py
 """
 
+import re
 import sys
 from pathlib import Path
 
@@ -16,6 +17,15 @@ is_macos = sys.platform == 'darwin'
 # Project paths
 project_root = Path(SPECPATH)
 scraper_dir = project_root / 'scraper'
+
+# Extract version from update_checker.py
+version_file = scraper_dir / 'update_checker.py'
+app_version = '0.0.0'
+if version_file.exists():
+    content = version_file.read_text()
+    match = re.search(r'__version__\s*=\s*["\']([^"\']+)["\']', content)
+    if match:
+        app_version = match.group(1)
 
 # Collect all scraper module files as data
 scraper_datas = []
@@ -199,8 +209,8 @@ else:
             info_plist={
                 'CFBundleName': 'JamabandiScraper',
                 'CFBundleDisplayName': 'Jamabandi Scraper',
-                'CFBundleVersion': '1.0.0',
-                'CFBundleShortVersionString': '1.0.0',
+                'CFBundleVersion': app_version,
+                'CFBundleShortVersionString': app_version,
                 'NSHighResolutionCapable': True,
                 'NSRequiresAquaSystemAppearance': False,  # Support dark mode
             },

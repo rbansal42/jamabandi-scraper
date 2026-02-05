@@ -12,6 +12,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       
+      - name: Inject version from git tag
+        shell: pwsh
+        run: |
+          $version = "${{ github.ref_name }}".TrimStart('v')
+          if ([string]::IsNullOrEmpty($version)) { $version = "0.0.0-dev" }
+          Write-Host "Injecting version: $version"
+          $file = "scraper/update_checker.py"
+          (Get-Content $file) -replace '__version__ = ".*"', "__version__ = `"$version`"" | Set-Content $file
+          Get-Content $file | Select-String "__version__"
+      
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -39,6 +49,14 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+      
+      - name: Inject version from git tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          if [ -z "$VERSION" ]; then VERSION="0.0.0-dev"; fi
+          echo "Injecting version: $VERSION"
+          sed -i '' "s/__version__ = \".*\"/__version__ = \"$VERSION\"/" scraper/update_checker.py
+          grep "__version__" scraper/update_checker.py
       
       - name: Set up Python
         uses: actions/setup-python@v5
