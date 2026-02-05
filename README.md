@@ -93,6 +93,33 @@ download records on your behalf.
 
 ---
 
+## Reliability Features
+
+### Automatic Retry
+Failed downloads are automatically retried at the end of a scraping session. The retry manager:
+- Classifies failures as transient (worth retrying) or permanent (no record exists)
+- Uses exponential backoff between retry attempts
+- Respects configurable max retries (default: 3)
+
+### Adaptive Rate Limiting
+The scraper automatically adjusts request delays based on server response:
+- Backs off on 429 (Too Many Requests) errors
+- Increases delay on server errors (5xx)
+- Decreases delay when server is responsive
+
+### Progress Persistence
+Progress is saved atomically every few downloads to prevent data loss:
+- Uses temp file + rename for atomic writes
+- Configurable save interval
+- Tracks statistics (download count, time, etc.)
+
+### Download Validation
+Each download is validated before saving:
+- HTML checked for error patterns (no record, session expired, etc.)
+- PDF validated for correct header and minimum size
+
+---
+
 ## Configuration
 
 The scraper can be configured via `config.yaml` in the project root. If the file doesn't exist, defaults are used.
